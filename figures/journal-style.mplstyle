@@ -1,0 +1,11 @@
+xtick.labelsize: 16
+ytick.labelsize: 16
+font.size: 15
+figure.autolayout: True
+axes.titlesize : 16
+axes.labelsize : 17
+lines.linewidth : 2
+lines.markersize : 6
+legend.fontsize: 13
+mathtext.fontset: stix
+font.sans-serif: Arial, Helvetica, DejaVu Sans, Lucida Grande, Verdana, Geneva, Lucid, Avant Garde, sans-serif
