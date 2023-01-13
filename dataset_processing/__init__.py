@@ -1,14 +1,9 @@
-def get_dataset(dataset_name):
-    dataset_name = str(dataset_name).lower()
-    if dataset_name == 'best':
-        from .best import WholeSlideImageDataset
-        return WholeSlideImageDataset
-    elif dataset_name == 'delta':
-        #To be implemented
-        from .delta import WholeSlideImageDataset
-        return WholeSlideImageDataset
-    else:
-        raise NotImplementedError(f'Dataset Type {dataset_name} is Not Implemented')
+# def get_dataset(dataset_name):
+#     dataset_name = str(dataset_name).lower()
+#     from .slide_dataset import WholeSlideImageDataset
+#     return WholeSlideImageDataset
+    # else:
+        # raise NotImplementedError(f'Dataset Type {dataset_name} is Not Implemented')
 
 def class_parser(stain='he', dysplasia_combine = True, respiratory_combine = True, gastric_combine = True, atypia_combine = True, p53_combine = True):
     '''

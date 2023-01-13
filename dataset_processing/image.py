@@ -39,7 +39,7 @@ def make_dataset(
     class_to_idx: Optional[Dict[str, int]] = None,
     extensions: Optional[Union[str, Tuple[str, ...]]] = None,
     is_valid_file: Optional[Callable[[str], bool]] = None,
-) -> List[Tuple[str, int]]:
+    ) -> List[Tuple[str, int]]:
     """Generates a list of samples of a form (path_to_sample, class).
 
     See :class:`DatasetFolder` for details.
@@ -326,23 +326,6 @@ def get_example_params(img_path, img_class_index, num_classes, model_path=None):
         file_name_to_export (string): File name to export the visualizations
         pretrained_model(Pytorch model): Model to use for the operations
     """
-    # Pick one of the examples (path_to_image, class_id)
-    #example_list = (('images_to_gradcam/BEST2 CAM 0496 HE - 2020-11-12 13.48.59_71484.58615411418_24314.51942487179_400.jpg', 1), # validation set atypia
-    #                ('images_to_gradcam/BEST2 CAM 0496 HE - 2020-11-12 13.48.59_68865.63097137475_24532.967900355347_400.jpg', 1),
-    #                ('images_to_gradcam/BEST2 CAM 0496 HE - 2020-11-12 13.48.59_46918.11649108594_29908.454685752833_400.jpg', 1),
-    #                ('images_to_gradcam/BEST2 CAM 0496 HE - 2020-11-12 13.48.59_67036.763638969_25493.863045508508_400.jpg', 3), # validation gastric cardia
-    #                ('images_to_gradcam/BEST2 CAM 0496 HE - 2020-11-12 13.48.59_43243.086592148975_34376.904938564345_400.jpg', 3),
-    #                ('images_to_gradcam/BEST2 CAM 0496 HE - 2020-11-12 13.48.59_44441.17883213467_34898.730146052694_400.jpg', 3),
-    #                ('images_to_gradcam/BEST2 CAM 0007 HE - 2020-11-11 16.28.24_20962.29712815113_74808.21993846718_400.jpg', 1), # validation set atypia
-    #                ('images_to_gradcam/BEST2 CAM 0007 HE - 2020-11-11 16.28.24_157440.0872233544_28197.985637544523_400.jpg', 3),
-    #                ('images_to_gradcam/BEST2 CAM 0007 HE - 2020-11-11 16.28.24_135520.0283803095_31609.484520955957_400.jpg', 3),
-    #                ('images_to_gradcam/BEST2 CAM 0007 HE - 2020-11-11 16.28.24_137244.17722386165_30893.810268887202_400.jpg', 3),
-    #                ('images_to_gradcam/BEST2 CAM 0007 HE - 2020-11-11 16.28.24_156375.80342565544_35140.23550381621_400.jpg', 7), # squamous mucosa
-    #                ('images_to_gradcam/BEST2 CAM 0007 HE - 2020-11-11 16.28.24_156027.50048499895_34624.7368179004_400.jpg', 7),
-    #                ('images_to_gradcam/snake.png', 56),
-    #                ('images_to_gradcam/cat_dog.png', 243),
-    #                ('images_to_gradcam/spider.png', 72))
-    #img_path = example_list[example_index][0]
     target_class = img_class_index #example_list[example_index][1]
     file_name_to_export = img_path[img_path.rfind('/')+1:img_path.rfind('.')]
     # Read image
@@ -365,22 +348,25 @@ def channel_averages(path, channelmeans=None, channelstds=None):
     if channelmeans:
         channel_means = channelmeans.split(',')
     else:
-        print(os.path.join(path, 'channel_means_and_stds.pickle'))
-        if os.path.exists(os.path.join(path, 'channel_means_and_stds.pickle')):
-            channel_means_and_stds = pickle.load(open(os.path.join(path, 'channel_means_and_stds.pickle'), 'rb'))
+        channel_file = os.path.join(path, 'channel_means_and_stds.pickle')
+        print(channel_file)
+        if os.path.exists(channel_file):
+            with open(channel_file, 'rb') as f:
+                channel_means_and_stds = pickle.load(f)
             channel_means = channel_means_and_stds['channel_means']
         else:
-            raise Warning('Values for -channelmeans must be provided if channel_means_and_stds.pickle file doesnt exist in -path')
+            raise Warning('Values for --channelmeans must be provided if channel_means_and_stds.pickle file doesnt exist in path')
 
     if channelstds:
         channel_stds = channelstds.split(',')
     else:
-        if os.path.exists(os.path.join(path, 'channel_means_and_stds.pickle')):
-            channel_means_and_stds = pickle.load(open(os.path.join(path, 'channel_means_and_stds.pickle'), 'rb'))
+        if os.path.exists(channel_file):
+            with open(channel_file, 'rb') as f:
+                channel_means_and_stds = pickle.load(f)
             channel_stds = channel_means_and_stds['channel_stds']
         else:
-            raise Warning('Values for -channelstds must be provided if channel_means_and_stds.pickle file doesnt exist in -path')
-    
+            raise Warning('Values for --channelstds must be provided if channel_means_and_stds.pickle file doesnt exist in path')
+
     return channel_means, channel_stds
 
 def image_transforms(channel_means, channel_stds, patch_size = 224, colourjitter = 0.0):

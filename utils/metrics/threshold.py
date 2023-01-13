@@ -46,6 +46,40 @@ def parse_args():
 
 	return args
 
+def generate_stats():
+	auc_data = []
+	auprc_data = []
+	fpr_data = []
+	tpr_data = []
+	precision_data = []
+	recall_data = []
+
+	binary_recall = []
+	binary_precision = []
+	binary_f1 = []
+
+	for threshold in thresh_data:
+		auc_data.append(roc_auc_score(df[calibration_label], df[threshold]))
+		auprc_data.append(average_precision_score(df[calibration_label], df[threshold]))
+		
+		fpr, tpr, thresholds = roc_curve(df[calibration_label], df[threshold])
+		precision, recall, thresholds = precision_recall_curve(df[calibration_label], df[threshold])
+
+		fpr_data.append(fpr)
+		tpr_data.append(tpr)
+		precision_data.append(precision)
+		recall_data.append(recall)
+
+		pred = df[threshold].tolist()
+		gt = df[calibration_label].tolist()
+		binary_pred = np.where(pred > 0, 1, 0)
+
+		binary_precision.append(precision_score(gt, binary_pred))
+		binary_recall.append(recall_score(gt, binary_pred))
+		binary_f1.append(f1_score(gt, binary_pred))
+
+	return auc_data, auprc_data, fpr_data, tpr_data, precision_data, recall_data, binary_recall, binary_precision, binary_f1
+
 # PLOTS
 def precision_recall_plots(df):
 	# # Plot precision and recall across thresholds
@@ -56,43 +90,49 @@ def precision_recall_plots(df):
 	ax = sns.lineplot(x=df['Thresh'], y=df['value'], hue=df['variable'], ax=ax)
 
 	ax.set(xlabel='Threshold', ylabel='Value')
-	ax.set_xticks(rotation=90)
+	# ax.set_xticks(rotation=90)
 	ax.legend(loc = 'lower right')
 	ax.plot([1, 0], [0, 1],'r--')
 	ax.set_xlim([0, 1])
 	ax.set_ylim([0, 1])
-	ax.set_xscale('log', basex=0.2)
+	# ax.set_xscale('log', basex=0.2)
 	ax.set_ylabel('Value')
 	ax.set_xlabel('Threshold')
+	ax.spines[['top', 'right']].set_visible(False)
 	return fig
 
-def auc_thresh(auc_probs, thresh_prob, biomarker):
+def auc_thresh_plot(auc_probs, thresh_prob, biomarker):
 	# Plot AUC at each threshold to determine best probability threshold
 	fig = plt.figure(figsize=(7.5,6))
-	plt.plot(thresh_prob, auc_probs['prob'])
-	plt.legend(loc='lower center', prop={'size': 12})
-	plt.xlim(-0.05, 1.05)
-	plt.ylim(0.6, 1.0)
-	plt.xlabel('Probability threshold for determination\nof number of tiles with ' + biomarker)
-	plt.ylabel('AUC-ROC for Cytosponge ' + biomarker + ' detection with\nthresholded number of tiles')
+	ax = fig.add_subplot()
+	ax.plot(thresh_prob, auc_probs['prob'])
+	ax.legend(loc='lower center', prop={'size': 12})
+	ax.set_xlim(-0.05, 1.05)
+	ax.set_ylim(0.6, 1.0)
+	ax.set_xlabel('Probability threshold for determination\nof number of tiles with ' + biomarker)
+	ax.set_ylabel('AUC-ROC for Cytosponge ' + biomarker + ' detection with\nthresholded number of tiles')
+	ax.spines[['top', 'right']].set_visible(False)
 	return fig
 
-def roc_thresh(cutoffs, auc_probs, auc_plotting, biomarker):
+def roc_thresh_plot(cutoffs, auc_probs, auc_plotting, biomarker):
 	# Plot ROC curve for best AUC probability threshold
 	fig = plt.figure()
-	plt.title('ROC with ' + biomarker + ' probability threshold of ' + str(cutoffs['tile_thresh']))
-	plt.plot(auc_plotting['fpr'], auc_plotting['tpr'], 'b', label = 'AUC = %0.2f' % max(auc_probs['prob']))
-	plt.legend(loc = 'lower right')
-	plt.plot([0, 1], [0, 1],'r--')
-	plt.xlim([0, 1])
-	plt.ylim([0, 1])
-	plt.ylabel('True Positive Rate')
-	plt.xlabel('False Positive Rate')
+	ax = fig.add_subplot()
+	ax.set_title('ROC with ' + biomarker + ' probability threshold of ' + str(cutoffs['tile_thresh']))
+	ax.plot(auc_plotting['fpr'], auc_plotting['tpr'], 'b', label = 'AUC = %0.2f' % max(auc_probs['prob']))
+	ax.legend(loc = 'lower right')
+	ax.plot([0, 1], [0, 1],'r--')
+	ax.set_xlim([0, 1])
+	ax.set_ylim([0, 1])
+	ax.set_ylabel('True Positive Rate')
+	ax.set_xlabel('False Positive Rate')
+	ax.spines[['top', 'right']].set_visible(False)
 	return fig
 
-def auprc_curve(auprc_cutoffs, auprc_probs, auprc_plotting, biomarker):
+def auprc_curve_plot(auprc_cutoffs, auprc_probs, auprc_plotting, biomarker):
 	#Plot AUPRC curve for best AUC probability threshold
-	fig, ax = plt.add_subplots()
+	fig = plt.figure()
+	ax = fig.add_subplot()
 	ax.set_title('AUPRC with ' + biomarker + ' probability threshold of ' + str(auprc_cutoffs['tile_thresh']))
 	ax.plot(auprc_plotting['precision'], auprc_plotting['recall'], 'b', label = 'AUC = %0.2f' % max(auprc_probs['prob']))
 	ax.legend(loc = 'lower right')
@@ -101,9 +141,10 @@ def auprc_curve(auprc_cutoffs, auprc_probs, auprc_plotting, biomarker):
 	ax.set_ylim([0, 1])
 	ax.set_ylabel('True Positive Rate')
 	ax.set_xlabel('Precision')
+	ax.spines[['top', 'right']].set_visible(False)
 	return fig
 
-def auprc_thresh(auprc_probs, thresh_prob, biomarker):
+def auprc_thresh_plot(auprc_probs, thresh_prob, biomarker):
 	# Plot AUPRC at each threshold to determine best probability threshold
 	fig = plt.figure(figsize=(7.5,6))
 	ax = fig.add_subplot()
@@ -113,6 +154,7 @@ def auprc_thresh(auprc_probs, thresh_prob, biomarker):
 	ax.set_ylim(0.6, 1.0)
 	ax.set_xlabel('Probability threshold for determination\nof number of tiles with ' + biomarker)
 	ax.set_ylabel('AUPRC for Cytosponge ' + biomarker + ' detection with\nthresholded number of tiles')
+	ax.spines[['top', 'right']].set_visible(False)
 	return fig
 
 if __name__ == '__main__':
@@ -190,21 +232,21 @@ if __name__ == '__main__':
 		precision_data.append(precision)
 		recall_data.append(recall)
 
-		pred = df[threshold].tolist()
+		pred = (df[threshold] > 0).tolist()
 		gt = df[calibration_label].tolist()
-		binary_pred = np.where(pred > 0, 1, 0)
 
-		binary_precision.append(precision_score(gt, binary_pred))
-		binary_recall.append(recall_score(gt, binary_pred))
-		binary_f1.append(f1_score(gt, binary_pred))
+		binary_precision.append(precision_score(gt, pred))
+		binary_recall.append(recall_score(gt, pred))
+		binary_f1.append(f1_score(gt, pred))
 
 	pd.set_option('display.max_rows', None)
 	thresh_prec_rec_df = pd.DataFrame(list(zip([str(p) for p in thresh_prob], binary_precision, binary_recall, binary_f1)), columns=['Thresh', 'Precision', 'Recall', 'F1'])
+	thresh_prec_rec_melted_df = thresh_prec_rec_df.melt(id_vars=['Thresh'], value_vars=['Precision', 'Recall'])
 
 	max_auc = max(auc_data)
 	max_auc_idx = auc_data.index(max_auc)
 	max_auc_data = [i for i, j in enumerate(auc_data) if j == max_auc]
-	print(csv, 'Probability: ' + str(thresh_prob[max_auc_data[0]]), 'AUC: ' + str(auc_data[max_auc_data[0]]))
+	print('Probability: ' + str(thresh_prob[max_auc_data[0]]), 'AUC: ' + str(auc_data[max_auc_data[0]]))
 
 	cutoff_prob.append(round(thresh_prob[max_auc_data[0]],6))
 	cutoffs['tile_thresh'] = round(thresh_prob[max_auc_data[0]], 7)
@@ -218,7 +260,7 @@ if __name__ == '__main__':
 	max_auprc = max(auprc_data)
 	max_auprc_idx = auprc_data.index(max_auprc)
 	max_auprc_data = [i for i, j in enumerate(auprc_data) if j == max_auprc]
-	print(csv, 'Probability: ' + str(thresh_prob[max_auprc_data[0]]), 'AUPRC: ' + str(auprc_data[max_auprc_data[0]]))
+	print('Probability: ' + str(thresh_prob[max_auprc_data[0]]), 'AUPRC: ' + str(auprc_data[max_auprc_data[0]]))
 	auprc_cutoff_prob.append(round(thresh_prob[max_auprc_data[0]],6))
 	auprc_cutoffs['tile_thresh'] = thresh_prob[max_auprc_data[0]]
 	auprc_probs['prob'] = auprc_data
@@ -227,21 +269,20 @@ if __name__ == '__main__':
 	auprc_plotting['recall'] = recall_data[max_auprc_idx]
 
 	if args.pr:
-		thresh_prec_rec_melted_df = thresh_prec_rec_df.melt(id_vars=['Thresh'], value_vars=['Precision', 'Recall'])
 		pr_fig = precision_recall_plots(thresh_prec_rec_melted_df)
 		pr_fig.savefig(os.path.join(output_folder, 'pr_curve' + biomarker.upper() + args.format))
 	if args.auc:
-		auc_fig = auc_thresh(auc_probs, thresh_prob, biomarker)
+		auc_fig = auc_thresh_plot(auc_probs, thresh_prob, biomarker)
 		auc_fig.savefig(os.path.join(output_folder, 'auc_prob_threshold' + biomarker.upper() + args.format)) #57casetrainval
 	if args.roc:
-		roc_fig = roc_thresh(cutoffs, auc_probs, auc_plotting, biomarker)
+		roc_fig = roc_thresh_plot(cutoffs, auc_probs, auc_plotting, biomarker)
 		roc_fig.savefig(os.path.join(output_folder, 'roc_curve' + biomarker.upper() + args.format))
 	if args.auprc:
-		auprc_thresh_fig = auprc_curve(auprc_cutoffs, auprc_probs, auprc_plotting, biomarker)
-		auprc_thresh_fig.savefig(os.path.join(output_folder, 'auprc_curve' + biomarker.upper() + args.format))
+		auprc_curve_fig = auprc_curve_plot(auprc_cutoffs, auprc_probs, auprc_plotting, biomarker)
+		auprc_curve_fig.savefig(os.path.join(output_folder, 'auprc_curve' + biomarker.upper() + args.format))
 	if args.thresh:
-		auprc_fig = auprc_thresh(auprc_probs, thresh_prob, biomarker)
-		auprc_fig.savefig(os.path.join(output_folder, 'auprc_prob_threshold' + biomarker.upper() + args.format))
+		auprc_thresh_fig = auprc_thresh_plot(auprc_probs, thresh_prob, biomarker)
+		auprc_thresh_fig.savefig(os.path.join(output_folder, 'auprc_prob_threshold' + biomarker.upper() + args.format))
 
 	print(cutoffs)
 

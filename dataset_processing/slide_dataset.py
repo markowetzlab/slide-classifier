@@ -1,41 +1,15 @@
 # Marcel Gehrung
 
-import os
 import pickle
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple,
 
 import torch
 import torch.utils.data
 import torchvision
-from PIL import Image
-from torch.utils.data import Dataset
 from torchvision.datasets import DatasetFolder
 from tqdm import tqdm
 
 from .image import IMG_EXTENSIONS, default_loader, make_dataset
-
-class WholeSlideImageDataset(Dataset):
-    """WholeSlideImage dataset."""
-
-    def __init__(self, slideClass, foregroundOnly=False, transform=None):
-        self.slideClass = slideClass
-        self.foregroundOnly = foregroundOnly
-        self.transform = transform
-
-    def __len__(self):
-        return self.slideClass.getTileCount(foregroundOnly=self.foregroundOnly)
-
-    def __getitem__(self, idx):
-        tileAddress = self.slideClass.ind2sub(idx, foregroundOnly=self.foregroundOnly)
-        img = Image.fromarray(self.slideClass.getTile(
-            tileAddress, writeToNumpy=True)).convert('RGB')
-
-        if self.transform:
-            img = self.transform(img)
-
-        sample = {'image': img, 'tileAddress': tileAddress}
-
-        return sample
 
 # Taken from an existing open-source project:
 # https://github.com/ufoym/imbalanced-dataset-sampler

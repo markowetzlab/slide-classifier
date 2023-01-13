@@ -16,7 +16,7 @@ from sklearn.metrics import (accuracy_score, balanced_accuracy_score, f1_score,
 from torch.optim import lr_scheduler
 from tqdm import tqdm
 
-from dataset_processing.best import EmptyDirAcceptingImageFolder, ImbalancedDatasetSampler
+from dataset_processing.slide_dataset import EmptyDirAcceptingImageFolder, ImbalancedDatasetSampler
 from models import get_network
 from dataset_processing import class_parser
 from dataset_processing.image import channel_averages, transforms
@@ -85,10 +85,10 @@ def train_model(model, params, device, criterion, optimizer, scheduler, dataload
 			epoch_predictions = []
 			running_loss = 0.0
 			running_corrects = 0
-			running_tp = {class_name: 0 for class_idx, class_name in enumerate(class_names)}
-			running_fp = {class_name: 0 for class_idx, class_name in enumerate(class_names)}
-			running_tn = {class_name: 0 for class_idx, class_name in enumerate(class_names)}
-			running_fn = {class_name: 0 for class_idx, class_name in enumerate(class_names)}
+			running_tp = {class_name: 0 for _, class_name in enumerate(class_names)}
+			running_fp = {class_name: 0 for _, class_name in enumerate(class_names)}
+			running_tn = {class_name: 0 for _, class_name in enumerate(class_names)}
+			running_fn = {class_name: 0 for _, class_name in enumerate(class_names)}
 
 			# Iterate over data.
 			for inputs, labels in tqdm(dataloaders[phase], disable=silent):
@@ -186,6 +186,10 @@ if __name__ == '__main__':
 		print("Training on GPU")
 	else:
 		print("Training on CPU")
+
+	if torch.cuda.device_count() > 1:
+		print("Let's use", torch.cuda.device_count(), "GPUs!")
+		network = nn.DataParallel(network)
 
 	random.seed(args.seed)
 

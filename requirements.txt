@@ -8,3 +8,4 @@ pyvips
 shapely
 torch
 torchvision
+slidl
