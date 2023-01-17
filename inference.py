@@ -76,12 +76,13 @@ def parse_args():
 
 if __name__ == '__main__':
 	args = parse_args()
+	
 	slide_path = args.slide_path
 	tile_size = args.tile_size
 	network = args.network
 
 	classes = class_parser(args.stain, args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
-	trained_model, params = get_network(network, class_names=classes, pretrained=True)
+	trained_model, params = get_network(network, class_names=classes, pretrained=False)
 	try:
 		trained_model.load_state_dict(torch.load(args.model_path))
 	except:	
@@ -205,7 +206,7 @@ if __name__ == '__main__':
 			im_path = os.path.join(args.output, 'images')
 			if not os.path.exists(im_path):
 				os.makedirs(im_path, exist_ok=True)
-			slide_im.plot_thumbnail(case_id=ID, target=ranked_class)			
+			slide_im.plot_thumbnail(case_id=ID, target=ranked_class)
 			if args.thumbnail:
 				slide_im.save(im_path, case_path.replace('.ndpi', "_thumbnail"))
 			slide_im.draw_class(target = ranked_class)
