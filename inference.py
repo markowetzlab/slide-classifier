@@ -22,32 +22,33 @@ from utils.metrics.threshold import precision_recall_plots, auc_thresh_plot, roc
 from slidl.utils.torch.WholeSlideImageDataset import WholeSlideImageDataset
 
 from sklearn.metrics import (auc, average_precision_score, confusion_matrix,
-                             f1_score, precision_recall_curve, precision_score,
-                             recall_score, roc_auc_score, roc_curve)
+							 f1_score, precision_recall_curve, precision_score,
+							 recall_score, roc_auc_score, roc_curve)
 
 import warnings
 warnings.filterwarnings('always')
 
 def parse_args():
 	parser = argparse.ArgumentParser(description='Run inference on slides.')
-	
-	#args.stains
+
+	#dataset processing
+	parser.add_argument("--dataset", default='delta', help="Flag to switch between datasets. Currently supported: 'best'/'delta'")
 	parser.add_argument("--stain", required=True, help="he or p53")
 	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
 	parser.add_argument("--target", type=str, default=None, help="Target class to identify, if None then defaults to stain class.")
-	
+	parser.add_argument("--gt", type=str, default=None, help="Column containing ground truth labels")
+
 	#model path and parameters
 	parser.add_argument("--network", required=True, help="which CNN architecture to use")
 	parser.add_argument("--model_path", required=True, help="path to stored model weights")
 
-	#data paths
+	#slide paths and tile properties
 	parser.add_argument("--slide_path", required=True, help="slides root folder")
 	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
 	parser.add_argument("--tile_size", default=400, help="architecture tile size")
-
 	parser.add_argument("--overlap", default=0, help="what fraction of the tile edge neighboring tiles should overlap horizontally and vertically (default is 0)")
 	parser.add_argument("--foreground_only", action='store_true', help="Foreground with tissue only")
-
+	
 	#class variables
 	parser.add_argument("--dysplasia_separate", action='store_false', help="Flag whether to separate the atypia of uncertain significance and dysplasia classes")
 	parser.add_argument("--respiratory_separate", action='store_false', help="Flag whether to separate the respiratory mucosa cilia and respiratory mucosa classes")
@@ -61,13 +62,14 @@ def parse_args():
 	parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.")
 	parser.add_argument("--num_workers", type=int, default=8, help="Number of workers to call for DataLoader")
 	
-	parser.add_argument('--silent', action='store_true', help='Flag which silences tqdm on servers')
-
 	#outputs
 	parser.add_argument("--output", required=True, help="path to folder where inference maps will be stored")
 	parser.add_argument("--csv", action='store_true', help="Generate csv output file")
 	parser.add_argument("--vis", action='store_true', help="Display WSI after each slide")
+	parser.add_argument("--thumbnail", action='store_true', help="Save thumbnail of WSI for analysis (vis must also be true)")
 	parser.add_argument('--stats', action='store_true', help='produce precision-recall plot')
+
+	parser.add_argument('--silent', action='store_true', help='Flag which silences terminal outputs')
 
 	args = parser.parse_args()
 	return args
@@ -80,6 +82,10 @@ if __name__ == '__main__':
 
 	classes = class_parser(args.stain, args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
 	trained_model, params = get_network(network, class_names=classes, pretrained=True)
+	try:
+		trained_model.load_state_dict(torch.load(args.model_path))
+	except:	
+		trained_model = torch.load(args.model_path)
 	
 	# Use manual batch size if one has been specified
 	if args.batch_size is not None:
@@ -87,8 +93,6 @@ if __name__ == '__main__':
 	else:
 		batch_size = params['batch_size']
 	patch_size = params['patch_size']
-
-	torch.load(args.model_path)
 
 	device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -110,17 +114,23 @@ if __name__ == '__main__':
 	cases.sort()
 
 	channel_means, channel_stds = channel_averages(slide_path, args.channel_means, args.channel_stds)
+	print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
 	data_transforms = image_transforms(channel_means, channel_stds, patch_size)['val']
 
 	if args.target is not None:
 		ranked_class = args.target
-		ranked_label = args.target
 	elif args.stain == 'he':
 		ranked_class = 'atypia'
-		ranked_label = 'Atypia'
+		if args.gt is not None:
+			ranked_label = args.gt
+		else:
+			ranked_label = 'Atypia'
 	elif args.stain == 'p53':
 		ranked_class = 'aberrant_positive_columnar'
-		ranked_label = 'P53 positive'
+		if args.gt is not None:
+			ranked_label = args.gt
+		else:
+			ranked_label = 'P53 positive'
 	else:
 		raise AssertionError('Stain currently must be he or p53.')
 
@@ -134,20 +144,28 @@ if __name__ == '__main__':
 		if os.path.isfile(args.labels):
 			labels = pd.read_csv(args.labels, index_col=0)
 			gt_labels = labels[ranked_label]
-			gt_labels = gt_labels.map(dict(Y=1, N=0))
+			if not args.dataset == 'best':
+				gt_labels = gt_labels.map(dict(Y=1, N=0))
 		else:
 			raise AssertionError('Not a valid path for ground truth labels.')
 
 	for case in cases:
 		case_path = case.split('/')[-1]
-		case_ID = case_path.split('-')[0]
-		ID = case_ID[:10]
-		pot_ID = case_ID[10:18]
+		case_ID = case_path.split(' ')
+		if args.dataset == 'best':
+			ID = '/'.join(case_ID[:3])
+			pot_ID = case_ID[3]
+		else:
+			ID = case_ID[0]
+			pot_ID = case_ID[1]
 		if not args.silent:
 			print('Processing case: ', ID, 'from', case)
 
 		case_file = os.path.join(slide_path, case)
-		slide_output = os.path.join(output_path, case_path.replace(args.format, '_inference'))
+		inference_output = os.path.join(output_path, 'inference')
+		if not os.path.exists(inference_output):
+			os.makedirs(inference_output)
+		slide_output = os.path.join(inference_output, case_path.replace(args.format, '_inference'))
 
 		if os.path.isfile(slide_output + '.pml'):
 			if not args.silent:
@@ -166,7 +184,7 @@ if __name__ == '__main__':
 			since = time.time()
 			dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 			
-			slidl_slide.inferClassifier(trained_model, classNames=classes, dataTransforms=data_transforms, numWorkers=args.num_workers)
+			slidl_slide.inferClassifier(trained_model, classNames=classes, dataTransforms=data_transforms, numWorkers=args.num_workers, silent=args.silent)
 			slidl_slide.save(fileName = slide_output)
 			time_elapsed = time.time() - since
 			if not args.silent:
@@ -185,9 +203,13 @@ if __name__ == '__main__':
 		if args.vis:
 			slide_im = slide_image(slidl_slide, args.stain, classes)
 			im_path = os.path.join(args.output, 'images')
-			os.makedirs(im_path, exist_ok=True)
+			if not os.path.exists(im_path):
+				os.makedirs(im_path, exist_ok=True)
+			slide_im.plot_thumbnail(case_id=ID, target=ranked_class)			
+			if args.thumbnail:
+				slide_im.save(im_path, case_path.replace('.ndpi', "_thumbnail"))
 			slide_im.draw_class(target = ranked_class)
-			slide_im.plot(case_id=ID, target = ranked_class)
+			slide_im.plot_class(target = ranked_class)
 			plt.show()
 			slide_im.save(im_path, case_path.replace('.ndpi', "_" + ranked_class))
 

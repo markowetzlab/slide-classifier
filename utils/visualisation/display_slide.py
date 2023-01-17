@@ -46,12 +46,25 @@ class slide_image:
 				else:
 					self.predictions[class_name][tile_address[0],tile_address[1]] = tile_entry['classifierInferencePrediction'][class_name]
 
-	def plot(self, case_id=None, target=None):
-		self.ax.imshow(resize(self.im, self.predictions[target].shape))
-		im = self.ax.imshow(self.predictions[target],cmap='plasma',alpha=0.3, vmin=0, vmax=1.0)
-		self.ax.set_title(case_id+"\n"+target)
-		self.fig.colorbar(im)
+	def plot_thumbnail(self, case_id=None, target=None):
+		title = ''
+		if case_id is not None:
+			title += case_id
+		if target is not None:
+			self.ax.imshow(resize(self.im, self.predictions[list(self.predictions.keys())[0]].shape))		
+			title += "\n" + target
+		else:
+			self.ax.imshow(resize(self.im, self.predictions[target].shape))
+		self.ax.set_title(title)
 
+	def plot_class(self, target=None):
+		if target is not None:
+			im = self.ax.imshow(self.predictions[target], cmap='plasma',alpha=0.3, vmin=0, vmax=1.0)
+			cax = self.fig.add_axes([self.ax.get_position().x1+0.01,self.ax.get_position().y0,0.02,self.ax.get_position().height])
+			self.fig.colorbar(im, cax=cax)
+		else:
+			print('Target not provided.')
+			
 	def save(self, out_path, file_name, format='.png'):
 		print("Visualizing inference for "+ out_path +"...")
 		self.fig.savefig(os.path.join(out_path, file_name + format))
