@@ -95,7 +95,12 @@ if __name__ == '__main__':
 		batch_size = params['batch_size']
 	patch_size = params['patch_size']
 
-	device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+	if torch.cuda.is_available() and torch.version.hip:
+		device = torch.device("cuda:0")
+	elif torch.cuda.is_available() and torch.version.cuda:
+		device = torch.device("cuda:0")
+	else:
+		device = torch.device("cpu")
 
 	if torch.cuda.device_count() > 1:
 		print("Let's use", torch.cuda.device_count(), "GPUs!")
@@ -111,13 +116,6 @@ if __name__ == '__main__':
 		os.makedirs(output_path, exist_ok=True)
 	print("Outputting inference to: ", output_path)
 
-	cases = glob.glob(os.path.join(args.slide_path, '*' + args.format))
-	cases.sort()
-
-	channel_means, channel_stds = channel_averages(slide_path, args.channel_means, args.channel_stds)
-	print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
-	data_transforms = image_transforms(channel_means, channel_stds, patch_size)['val']
-
 	if args.target is not None:
 		ranked_class = args.target
 	elif args.stain == 'he':
@@ -126,43 +124,46 @@ if __name__ == '__main__':
 			ranked_label = args.gt
 		else:
 			ranked_label = 'Atypia'
+			file_name = 'H&E'
 	elif args.stain == 'p53':
 		ranked_class = 'aberrant_positive_columnar'
 		if args.gt is not None:
 			ranked_label = args.gt
 		else:
 			ranked_label = 'P53 positive'
+			file_name = 'P53'
 	else:
 		raise AssertionError('Stain currently must be he or p53.')
 
 	csv_path = os.path.join(output_path, args.stain + '-prediction-data.csv')
 	if os.path.isfile(csv_path):
-		df = pd.read_csv(csv_path)
+		df = pd.read_csv(csv_path, index_col='CYT ID')
 	else:
 		df = pd.DataFrame()
-	
-	if args.labels is not None:
-		if os.path.isfile(args.labels):
-			labels = pd.read_csv(args.labels, index_col=0)
-			gt_labels = labels[ranked_label]
-			if not args.dataset == 'best':
-				gt_labels = gt_labels.map(dict(Y=1, N=0))
-		else:
-			raise AssertionError('Not a valid path for ground truth labels.')
 
-	for case in cases:
-		case_path = case.split('/')[-1]
-		case_ID = case_path.split(' ')
-		if args.dataset == 'best':
-			ID = '/'.join(case_ID[:3])
-			pot_ID = case_ID[3]
-		else:
-			ID = case_ID[0]
-			pot_ID = case_ID[1]
+	channel_means, channel_stds = channel_averages(slide_path, args.channel_means, args.channel_stds)
+	if not args.silent:
+		print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
+	data_transforms = image_transforms(channel_means, channel_stds, patch_size)['val']
+
+	if os.path.isfile(args.labels):
+		labels = pd.read_csv(args.labels, index_col=0)
+		labels.sort_index(inplace=True)
+		if not args.dataset == 'best':
+			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0))
+	else:
+		raise AssertionError('Not a valid path for ground truth labels.')
+
+	for index, row in labels.iterrows():
+		ID = index
+		case_file = row[file_name]
+		case_path = os.path.join(slide_path, case_file)
+		if not os.path.exists(case_path):
+			print(f'File {case_path} not found.')
+			continue
 		if not args.silent:
-			print('Processing case: ', ID, 'from', case)
+			print('Processing case: ', ID, 'from', case_file)
 
-		case_file = os.path.join(slide_path, case)
 		inference_output = os.path.join(output_path, 'inference')
 		if not os.path.exists(inference_output):
 			os.makedirs(inference_output)
@@ -175,7 +176,7 @@ if __name__ == '__main__':
 				tile_dict = pickle.load(f)
 			slidl_slide = Slide(slide_output + '.pml')
 		else:
-			slidl_slide = Slide(case_file).setTileProperties(tileSize=tile_size, tileOverlap=float(args.overlap))
+			slidl_slide = Slide(case_path).setTileProperties(tileSize=tile_size, tileOverlap=float(args.overlap))
 
 			if args.foreground_only:
 				slidl_slide.detectForeground(threshold=95)
@@ -193,7 +194,7 @@ if __name__ == '__main__':
 
 		target_accuracy = slidl_slide.numTilesAboveClassPredictionThreshold(ranked_class, probabilityThresholds=[round(prob, 3) for prob in prob_thresh])
 
-		data = {'CYT ID': ID, 'Pot ID': pot_ID, 'Case Path': case_path, 'Ground Truth Label': int(gt_labels.loc[ID])}
+		data = {'CYT ID': ID, 'Case Path': case_file, 'Ground Truth Label': int(row[ranked_label])}
 
 		tile_cols = [ranked_class + ' > ' + str(round(prob, 3)) for prob in prob_thresh]
 		tile_data = dict(zip(tile_cols, target_accuracy))
@@ -205,14 +206,14 @@ if __name__ == '__main__':
 			slide_im = slide_image(slidl_slide, args.stain, classes)
 			im_path = os.path.join(args.output, 'images')
 			if not os.path.exists(im_path):
-				os.makedirs(im_path, exist_ok=True)
+				os.makedirs(im_path)
 			slide_im.plot_thumbnail(case_id=ID, target=ranked_class)
 			if args.thumbnail:
-				slide_im.save(im_path, case_path.replace('.ndpi', "_thumbnail"))
+				slide_im.save(im_path, case_path.replace(args.format, "_thumbnail"))
 			slide_im.draw_class(target = ranked_class)
 			slide_im.plot_class(target = ranked_class)
 			plt.show()
-			slide_im.save(im_path, case_path.replace('.ndpi', "_" + ranked_class))
+			slide_im.save(im_path, case_path.replace(args.format, "_" + ranked_class))
 
 	if args.csv:
 		df.to_csv(csv_path)
