@@ -1,13 +1,12 @@
 import argparse
 import copy
 import datetime
-import glob
 import os
 import pickle
 import random
 import time
+import pandas as pd
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -33,6 +32,7 @@ def parse_args():
 	parser.add_argument("--network", type= str, required=True, help="which CNN network to use (vgg11_bn, vgg16, vgg19_bn, resnet18, resnet152, googlenet, inception_v3, squeezenet1_1, densenet121, densenet161, alexnet, resnext101_32x8d, shufflenet_v2_x1_0, mobilenet_v3_large, wide_resnet101_2, mnasnet1_0, 'efficientnet_b0, 'efficientnet_b7, regnet_x_32gf, regnet_y_32gf, vit_b_16, vit_l_16, convnext_tiny, convnext_large)")
 	parser.add_argument("--split", type=float, default=0.80, help="fraction of patients used for training instead of validation")
 
+	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
 	parser.add_argument("--slide_path", type=str, required=True, help="slides root folder")
 	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
 
@@ -53,6 +53,7 @@ def parse_args():
 
 	#training variables
 	parser.add_argument("--seed", default=366, type=int, help="seed used to partition training and validation cases")
+	parser.add_argument("--channel_norms", default='channel_means_and_stds.pickle', help='Path to channel norms pickle file')
 	parser.add_argument("--channelmeans", default=None, help="0-1 normalized colour channel means for all tiles on dataset separated by commas, e.g. 0.485,0.456,0.406 for RGB, respectively. If not speficied, these means will be taken from 'channel_means_and_stds.pickle' in the --slide_path")
 	parser.add_argument("--channelstds", default=None, help="0-1 normalized colour channel standard deviations for all tiles on dataset separated by commas, e.g. 0.229,0.224,0.225 for RGB, respectively. If not speficied, these standard deviations will be taken from 'channel_means_and_stds.p' in the --slide_path")
 	parser.add_argument("--colourjitter", type=float, default=0.0, help="how much to jitter (brightness, contrast, saturation, hue), should be 0-1")
@@ -171,7 +172,7 @@ def train_model(model, params, device, criterion, optimizer, scheduler, dataload
 				best_model_wts = copy.deepcopy(model.state_dict())
 
 			if phase == 'val':
-				torch.save(model.state_dict(), os.path.join(args.output, 'trained_models', stain + '-' +
+				torch.save(model.state_dict(), os.path.join(output_path, 'trained_models', stain + '-' +
 					'-' + str(network) + '_' +	str(now.day) + '-' + str(now.month) + '-' + str(now.year) + '-epoch-' + str(epoch) + '_ft.pt'))
 
 		wandb.log({**stats['train'], **stats['val']})
@@ -188,53 +189,69 @@ def train_model(model, params, device, criterion, optimizer, scheduler, dataload
 if __name__ == '__main__':
 	args = parse_args()
 	
-	wandb.init(project="delta", entity="wtprew", 
-		name=f'{args.dataset}_{args.stain}_{args.model}',
-		config={
-			'learning_rate': args.lr,
-			'architecture': args.model,
-			'dataset': args.dataset,
-			'seed': args.seed
-		})
-	random.seed(args.seed)
-	now = datetime.datetime.now()
-
 	network = args.network
 	stain = args.stain
+	dset = args.dataset
 	data_dir = args.slide_path
+	seed = args.seed
+	output_path = args.output
+	
+	random.seed(seed)
+	wandb.init(project="delta", entity="wtprew", 
+		name=f'{dset}_{stain}_{network}',
+		config={
+			'learning_rate': args.lr,
+			'architecture': network,
+			'dataset': dset,
+			'seed': seed
+		})
+	now = datetime.datetime.now()
 
-	class_names = class_parser(args.stain, args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
+	class_names = class_parser(stain, args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
 	class_count = [0] * len(class_names)
 	class_count_val = [0] * len(class_names)
 
-	channel_means, channel_stds = channel_averages(args.slide_path, args.channelmeans, args.channelstds)
-
+	if args.channel_means and args.channel_stds:
+		channel_means = args.channel_means.split(',')
+		channel_stds = args.channel_stds.split(',')
+	else:
+		channel_norm = args.model_path.replace(args.model_path.split('/')[-1], args.channel_norms)
+		channel_means, channel_stds = channel_averages(channel_norm)
+		print('Channel path: ', channel_norm)
 	print('Channel means:', channel_means)
 	print('Channel_stds:', channel_stds)
 
 	device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-	if torch.cuda.is_available():
-		print("Training on GPU")
+	if torch.cuda.is_available() and torch.version.hip:
+		device = torch.device("cuda:0")
+		print("Training on AMD GPU")
+	elif torch.cuda.is_available() and torch.version.cuda:
+		device = torch.device("cuda:0")
+		print("Training on Nvidia GPU")
 	else:
+		device = torch.device("cpu")
 		print("Training on CPU")
 
-	model_ft, params = get_network(args.network, class_names, pretrained=True)
+	model, params = get_network(args.network, class_names, pretrained=True)
 
 	if torch.cuda.device_count() > 1:
 		print("Let's use", torch.cuda.device_count(), "GPUs!")
-		model_ft = nn.DataParallel(model_ft)
-	model_ft = model_ft.to(device)
+		model = nn.DataParallel(model)
+	model = model.to(device)
 
 	criterion = nn.CrossEntropyLoss()
 	# Observe that all parameters are being optimized
-	optimizer_ft = optim.Adam(model_ft.parameters(), lr=float(args.lr), lr_momentum=float(args.lr_momentum))
+	optimizer_ft = optim.Adam(model.parameters(), lr=float(args.lr), lr_momentum=float(args.lr_momentum))
 	# Decay LR by a factor of 0.1 every 7 epochs
 	exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=int(args.lr_step_size), gamma=float(args.lr_gamma))
 
-	if args.dataset == 'best':
-		data_path = glob.glob(os.path.join(data_dir, "BEST*"))
+	if os.path.isfile(args.labels):
+		labels = pd.read_csv(args.labels, index_col=0)
+		if not args.dataset == 'best':
+			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0))
+		data_path = labels[''].dropna().tolist()
 	else:
-		data_path = glob.glob(os.path.join(data_dir, "DELTA*"))
+		raise AssertionError('Not a valid path for pandas series containing file names.')
 
 	random.shuffle(data_path)
 	cases = [os.path.split(case)[-1] for case in data_path]
@@ -244,12 +261,12 @@ if __name__ == '__main__':
 	training_partitions = [num_train_cases]
 	val_cases = cases[0:num_val_cases]
 
-	if not os.path.exists(os.path.join(args.output, 'trained_models')):
-		os.makedirs(os.path.join(args.output, 'trained_models'))
+	if not os.path.exists(os.path.join(output_path, 'trained_models')):
+		os.makedirs(os.path.join(output_path, 'trained_models'))
 
 	# Save train and val case split
 	trainval_split = {'train_cases': data_path[-1 - num_train_cases:-1], 'val_cases': data_path[0:num_val_cases]}
-	with open(os.path.join(args.output, "trainval_split.pickle"), 'wb') as f:
+	with open(os.path.join(output_path, "trainval_split.pickle"), 'wb') as f:
 		pickle.dump(trainval_split, f)
 
 	for case in cases[-1 - num_train_cases:-1]:
@@ -297,14 +314,14 @@ if __name__ == '__main__':
 
 		since = time.time()
 
-		model_ft, stats = train_model(model_ft, params, device, criterion, optimizer_ft, exp_lr_scheduler, class_names, dataloaders, num_epochs=int(args.num_epochs), silent=args.silent)
+		model_ft, stats = train_model(model, params, device, criterion, optimizer_ft, exp_lr_scheduler, class_names, dataloaders, num_epochs=int(args.num_epochs), silent=args.silent)
 
 		time_elapsed = time.time() - since
 		print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
 		
-		with open(os.path.join(args.output, 'training-' + args.stain + '-' + str(args.network) +'_'+ str(now.day) +'-'+ str(now.month) +'-'+ str(now.year) + '.pickle'), 'wb') as f:
+		with open(os.path.join(output_path, 'training-' + args.stain + '-' + str(args.network) +'_'+ str(now.day) +'-'+ str(now.month) +'-'+ str(now.year) + '.pickle'), 'wb') as f:
 			pickle.dump(stats, f)
-		torch.save(model_ft, os.path.join(args.output, 'trained_models', args.stain + '-' + str(args.network) + '_' + str(now.day) +'-'+ str(now.month) +'-'+ str(now.year) + '_ft.pt'))
+		torch.save(model_ft, os.path.join(output_path, 'trained_models', args.stain + '-' + str(args.network) + '_' + str(now.day) +'-'+ str(now.month) +'-'+ str(now.year) + '_ft.pt'))
 		torch.cuda.empty_cache()
 	
 	#Mark run as finished

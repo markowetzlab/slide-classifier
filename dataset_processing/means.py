@@ -6,6 +6,7 @@ import pickle
 import argparse
 import random
 import numpy as np
+import pandas as pd
 from torchvision import transforms
 from tqdm import tqdm
 from slidl.slide import Slide
@@ -13,9 +14,10 @@ from slidl.slide import Slide
 def parse_args():
 	parser = argparse.ArgumentParser(description='Create tile dictionaries from annotation ROIs.')
 
-	parser.add_argument("--slides_path", required=True, help="slides root folder")
-	parser.add_argument("--tiles", default=500, help="Number of random tiles to extract")
-	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image without full stop")
+	parser.add_argument("--slides_path", required=True, type=str, help="slides root folder")
+	parser.add_argument("--csv_path", default='../data/delta_val_slides_20220929.csv', help="list of slides from csv file")
+	parser.add_argument("--tiles", default=500, type=int, help="Number of random tiles to extract")
+	parser.add_argument("--format", default=".ndpi", type=str, help="extension of whole slide image without full stop")
 
 	parser.add_argument("--silent", action="store_true", help="Silence tqdm on servers")
 	
@@ -29,8 +31,15 @@ if __name__ == '__main__':
 	magnificationLevel = 0  # 1 = 20(x) or 0 = 40(x)
 	slidesRootFolder = args.slides_path
 
-	cases = glob.glob(os.path.join(args.slides_path, '*' + args.format))
-	cases.sort()
+	# cases = glob.glob(os.path.join(args.slides_path, '*' + args.format))
+	try:
+		labels = pd.read_csv(args.csv_path, index_col=0)
+	except:
+		labels = pd.read_table(args.csv_path, index_col=0)
+
+	cases = labels['P53'].dropna().tolist()
+	# cases.sort()
+
 	num_samples = len(cases)
 	print('Number of files:', num_samples)
 
@@ -53,15 +62,21 @@ if __name__ == '__main__':
 	tile_size = 400
 	normalise = transforms.Compose([transforms.ToTensor()])
 
-	for case in tqdm(cases, disable=args.silent):
-		slidl_slide = Slide(case).setTileProperties(tileSize=tile_size, tileOverlap=0)
+	for idx, case in enumerate(cases):
+		case_path = os.path.join(args.slides_path, case)
+		if not os.path.isfile(case_path):
+			if not args.silent:
+				print(f'Skipping {case}')
+		if not args.silent:
+			print(f'Processing {idx}/{len(cases)}: {case}')
+		slidl_slide = Slide(case_path).setTileProperties(tileSize=tile_size, tileOverlap=0)
 
 		ta = []
 		for address in slidl_slide.suitableTileAddresses():
 			ta.append(address)
 		ta = random.sample(ta, args.tiles)
 
-		for tl in ta:
+		for tl in tqdm(ta, disable=args.silent):
 			tile_counter += 1
 			nparea = slidl_slide.getTile(tl, writeToNumpy=True)[...,:3]
 			nparea = normalise(nparea).numpy()

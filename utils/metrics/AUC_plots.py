@@ -12,7 +12,7 @@ from sklearn.metrics import auc, confusion_matrix, roc_auc_score, roc_curve
 #calibrationCohort = pickle.load( open( "data/slideLevelAggregation/calibrationCohort.p", "rb" ) )
 #calibrationCohortHE = [s + '_HE_1' for s in calibrationCohort]
 
-plt.style.use('figures/journal-style.mplstyle')
+plt.style.use('../figures/journal-style.mplstyle')
 
 parser = argparse.ArgumentParser(description='Plot all HE AUCs.')
 #parser.add_argument("-mode", required=True, help="Plot calibration or validation cohort")

@@ -57,6 +57,7 @@ def parse_args():
 	parser.add_argument("--p53_separate", action='store_false', help="Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar")
 
 	#data processing
+	parser.add_argument("--channel_norms", default='channel_means_and_stds.pickle', help='Path to channel norms pickle file')
 	parser.add_argument("--channel_means", default=None, help="0-1 normalized color channel means for all tiles on dataset separated by commas, e.g. 0.485,0.456,0.406 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
 	parser.add_argument("--channel_stds", default=None, help="0-1 normalized color channel standard deviations for all tiles on dataset separated by commas, e.g. 0.229,0.224,0.225 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
 	parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.")
@@ -80,8 +81,29 @@ if __name__ == '__main__':
 	slide_path = args.slide_path
 	tile_size = args.tile_size
 	network = args.network
+	stain = args.stain
+	output_path = args.output
 
-	classes = class_parser(args.stain, args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
+	if args.target is not None:
+		ranked_class = args.target
+	elif stain == 'he':
+		ranked_class = 'atypia'
+		if args.gt is not None:
+			ranked_label = args.gt
+		else:
+			ranked_label = 'Atypia'
+			file_name = 'H&E'
+	elif stain == 'p53':
+		ranked_class = 'aberrant_positive_columnar'
+		if args.gt is not None:
+			ranked_label = args.gt
+		else:
+			ranked_label = 'P53 positive'
+			file_name = 'P53'
+	else:
+		raise AssertionError('Stain currently must be he or p53.')
+
+	classes = class_parser(stain, args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
 	trained_model, params = get_network(network, class_names=classes, pretrained=False)
 	try:
 		trained_model.load_state_dict(torch.load(args.model_path))
@@ -109,69 +131,62 @@ if __name__ == '__main__':
 	trained_model.to(device)
 	trained_model.eval()
 
-	prob_thresh = np.append(np.arange(0, 0.99, 0.05), np.arange(0.99, 0.999, 0.001))
+	prob_thresh = np.append(np.arange(0, 0.95, 0.05), np.arange(0.95, 0.99, 0.005))
 
-	output_path = args.output
 	if not os.path.exists(output_path):
 		os.makedirs(output_path, exist_ok=True)
 	print("Outputting inference to: ", output_path)
 
-	if args.target is not None:
-		ranked_class = args.target
-	elif args.stain == 'he':
-		ranked_class = 'atypia'
-		if args.gt is not None:
-			ranked_label = args.gt
-		else:
-			ranked_label = 'Atypia'
-			file_name = 'H&E'
-	elif args.stain == 'p53':
-		ranked_class = 'aberrant_positive_columnar'
-		if args.gt is not None:
-			ranked_label = args.gt
-		else:
-			ranked_label = 'P53 positive'
-			file_name = 'P53'
-	else:
-		raise AssertionError('Stain currently must be he or p53.')
-
-	csv_path = os.path.join(output_path, args.stain + '-prediction-data.csv')
+	csv_path = os.path.join(output_path, network + '-' + stain + '-prediction-data.csv')
 	if os.path.isfile(csv_path):
 		df = pd.read_csv(csv_path, index_col='CYT ID')
 	else:
-		df = pd.DataFrame()
+		df = pd.DataFrame(columns=['CYT ID'])
 
-	channel_means, channel_stds = channel_averages(slide_path, args.channel_means, args.channel_stds)
+	if args.channel_means and args.channel_stds:
+		channel_means = args.channel_means.split(',')
+		channel_stds = args.channel_stds.split(',')
+	else:
+		# channel_norm = args.model_path.replace(args.model_path.split('/')[-1], args.channel_norms)
+		channel_norm = args.channel_norms
+		channel_means, channel_stds = channel_averages(channel_norm)
 	if not args.silent:
 		print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
 	data_transforms = image_transforms(channel_means, channel_stds, patch_size)['val']
 
 	if os.path.isfile(args.labels):
 		labels = pd.read_csv(args.labels, index_col=0)
+		labels = labels.dropna(subset=[ranked_label])
 		labels.sort_index(inplace=True)
 		if not args.dataset == 'best':
-			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0))
+			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0, Equivocal=0))
 	else:
 		raise AssertionError('Not a valid path for ground truth labels.')
 
+	case_number = 0
 	for index, row in labels.iterrows():
-		ID = index
 		case_file = row[file_name]
-		case_path = os.path.join(slide_path, case_file)
+		case_number += 1
+		try:
+			case_path = os.path.join(slide_path, case_file)
+		except:
+			print(f'File {file_name} not found.')
+			continue
+
 		if not os.path.exists(case_path):
 			print(f'File {case_path} not found.')
 			continue
 		if not args.silent:
-			print('Processing case: ', ID, 'from', case_file)
+			print(f'Processing case {case_number}/{len(labels)}: {index} from {case_file}')
 
 		inference_output = os.path.join(output_path, 'inference')
 		if not os.path.exists(inference_output):
 			os.makedirs(inference_output)
-		slide_output = os.path.join(inference_output, case_path.replace(args.format, '_inference'))
+		slide_output = os.path.join(inference_output, case_file.replace(args.format, '_inference'))
 
 		if os.path.isfile(slide_output + '.pml'):
 			if not args.silent:
-				print(f"Case already processed: {ID}")
+				print(f"Case {index} already processed from {slide_output}")
 			with open(slide_output + '.pml', 'rb') as f:
 				tile_dict = pickle.load(f)
 			slidl_slide = Slide(slide_output + '.pml')
@@ -194,29 +209,26 @@ if __name__ == '__main__':
 
 		target_accuracy = slidl_slide.numTilesAboveClassPredictionThreshold(ranked_class, probabilityThresholds=[round(prob, 3) for prob in prob_thresh])
 
-		data = {'CYT ID': ID, 'Case Path': case_file, 'Ground Truth Label': int(row[ranked_label])}
+		data = {'CYT ID': index, 'Case Path': case_file, 'Ground Truth Label': int(row[ranked_label])}
 
 		tile_cols = [ranked_class + ' > ' + str(round(prob, 3)) for prob in prob_thresh]
-		tile_data = dict(zip(tile_cols, target_accuracy))
+		tile_data = dict(zip(tile_cols, [int(i) for i in target_accuracy]))
 		data.update(tile_data)
 
-		df = pd.concat([df, pd.DataFrame([data])])
+		df = pd.concat([df, pd.DataFrame([data]).set_index('CYT ID')])
 
 		if args.vis:
-			slide_im = slide_image(slidl_slide, args.stain, classes)
+			slide_im = slide_image(slidl_slide, stain, classes)
 			im_path = os.path.join(args.output, 'images')
 			if not os.path.exists(im_path):
 				os.makedirs(im_path)
-			slide_im.plot_thumbnail(case_id=ID, target=ranked_class)
+			slide_im.plot_thumbnail(case_id=index, target=ranked_class)
 			if args.thumbnail:
 				slide_im.save(im_path, case_path.replace(args.format, "_thumbnail"))
 			slide_im.draw_class(target = ranked_class)
 			slide_im.plot_class(target = ranked_class)
 			plt.show()
 			slide_im.save(im_path, case_path.replace(args.format, "_" + ranked_class))
-
-	if args.csv:
-		df.to_csv(csv_path)
 
 	if args.stats:
 		cutoff_prob = []
@@ -225,50 +237,57 @@ if __name__ == '__main__':
 		cutoffs = {}
 		auc_probs = {}
 		auc_plotting = {}
+		auc_data = []
+		
 		auprc_cutoffs = {}
 		auprc_probs = {}
-		auprc_plotting = {}
-	
-		auc_data = []
+		auprc_plotting = {}	
 		auprc_data = []
+		
 		fpr_data = []
 		tpr_data = []
+		
 		precision_data = []
 		recall_data = []
 	
-		binary_recall = []
 		binary_precision = []
+		binary_recall = []
 		binary_f1 = []
-	
+
+		gt_col = df['Ground Truth Label']
+
 		for thresh in tile_cols:
-			auc_data.append(roc_auc_score(df['Ground Truth Label'], df[thresh]))
-			auprc_data.append(average_precision_score(df['Ground Truth Label'], df[thresh]))
+			pred_col = df[thresh]
+
+			auc_data.append(roc_auc_score(gt_col, pred_col))
+			auprc_data.append(average_precision_score(gt_col, pred_col))
 			
-			fpr, tpr, threshs = roc_curve(df['Ground Truth Label'], df[thresh])
-			precision, recall, thresholds = precision_recall_curve(df['Ground Truth Label'], df[thresh])
+			fpr, tpr, threshs = roc_curve(gt_col, pred_col)
+			precision, recall, thresholds = precision_recall_curve(gt_col, pred_col)
 	
 			fpr_data.append(fpr)
 			tpr_data.append(tpr)
 			precision_data.append(precision)
 			recall_data.append(recall)
 	
-			pred = (df[thresh] > 0).tolist()
-			gt = df['Ground Truth Label'].tolist()
+			pred = (pred_col > 0).astype(int).tolist()
+			gt = gt_col.tolist()
 	
 			binary_precision.append(precision_score(gt, pred))
 			binary_recall.append(recall_score(gt, pred))
 			binary_f1.append(f1_score(gt, pred))
-	
-		thresh_prec_rec_df = pd.DataFrame(list(zip([str(p) for p in prob_thresh], binary_precision, binary_recall, binary_f1)), columns=['Thresh', 'Precision', 'Recall', 'F1'])
-		thresh_prec_rec_melted_df = thresh_prec_rec_df.melt(id_vars=['Thresh'], value_vars=['Precision', 'Recall'])
-	
+
+		thresh_prec_rec_df = pd.DataFrame(list(zip([str(round(p, 3)) for p in prob_thresh], binary_precision, binary_recall, binary_f1)), columns=['Thresh', 'Precision', 'Recall', 'F1'])
+		if args.csv:
+			import ipdb; ipdb.set_trace()
+			thresh_prec_rec_df.to_csv(csv_path.replace('prediction-data', 'results'))
+			
 		max_auc = max(auc_data)
 		max_auc_idx = auc_data.index(max_auc)
-		max_auc_data = [i for i, j in enumerate(auc_data) if j == max_auc]
-		print('Probability: ' + str(prob_thresh[max_auc_data[0]]), 'AUC: ' + str(auc_data[max_auc_data[0]]))
+		print('Probability: ' + str(prob_thresh[max_auc_idx]), 'AUC: ' + str(auc_data[max_auc_idx]))
 	
-		cutoff_prob.append(round(prob_thresh[max_auc_data[0]],6))
-		cutoffs['tile_thresh'] = round(prob_thresh[max_auc_data[0]], 7)
+		cutoff_prob.append(round(prob_thresh[max_auc_idx],6))
+		cutoffs['tile_thresh'] = round(prob_thresh[max_auc_idx], 7)
 		auc_probs['prob'] = auc_data
 	
 		auc_plotting['fpr'] = fpr_data[max_auc_idx]
@@ -278,29 +297,31 @@ if __name__ == '__main__':
 	
 		max_auprc = max(auprc_data)
 		max_auprc_idx = auprc_data.index(max_auprc)
-		max_auprc_data = [i for i, j in enumerate(auprc_data) if j == max_auprc]
-		print('Probability: ' + str(prob_thresh[max_auprc_data[0]]), 'AUPRC: ' + str(auprc_data[max_auprc_data[0]]))
+		print('Probability: ' + str(prob_thresh[max_auprc_idx]), 'AUPRC: ' + str(auprc_data[max_auprc_idx]))
 		
-		auprc_cutoff_prob.append(round(prob_thresh[max_auprc_data[0]],6))
-		auprc_cutoffs['tile_thresh'] = prob_thresh[max_auprc_data[0]]
+		auprc_cutoff_prob.append(round(prob_thresh[max_auprc_idx], 6))
+		auprc_cutoffs['tile_thresh'] = prob_thresh[max_auprc_idx]
 		auprc_probs['prob'] = auprc_data
 		auprc_plotting['precision'] = precision_data[max_auprc_idx]
 		auprc_plotting['recall'] = recall_data[max_auprc_idx]
 
-		pr_fig = precision_recall_plots(thresh_prec_rec_melted_df)
-		pr_fig.savefig(os.path.join(output_path, 'pr_curve' + args.stain.upper() + '.png'))
+		pr_fig = precision_recall_plots(thresh_prec_rec_df)
+		pr_fig.savefig(os.path.join(output_path, 'pr_curve_' + stain.upper() + '.png'))
 
-		auc_fig = auc_thresh_plot(auc_probs, prob_thresh, args.stain)
-		auc_fig.savefig(os.path.join(output_path, 'auc_prob_threshold' + args.stain.upper() + '.png'))
+		auc_fig = auc_thresh_plot(auc_probs, prob_thresh, stain)
+		auc_fig.savefig(os.path.join(output_path, 'auc_prob_threshold_' + stain.upper() + '.png'))
 
-		roc_fig = roc_thresh_plot(cutoffs, auc_probs, auc_plotting, args.stain)
-		roc_fig.savefig(os.path.join(output_path, 'roc_curve' + args.stain.upper() + '.png'))
+		roc_fig = roc_thresh_plot(cutoffs, auc_probs, auc_plotting, stain)
+		roc_fig.savefig(os.path.join(output_path, 'roc_curve_' + stain.upper() + '.png'))
 
-		auprc_curve_fig = auprc_curve_plot(auprc_cutoffs, auprc_probs, auprc_plotting, args.stain)
-		auprc_curve_fig.savefig(os.path.join(output_path, 'auprc_curve' + args.stain.upper() + '.png'))
+		auprc_curve_fig = auprc_curve_plot(auprc_cutoffs, auprc_probs, auprc_plotting, stain)
+		auprc_curve_fig.savefig(os.path.join(output_path, 'auprc_curve_' + stain.upper() + '.png'))
 
-		auprc_thresh_fig = auprc_thresh_plot(auprc_probs, prob_thresh, args.stain)
-		auprc_thresh_fig.savefig(os.path.join(output_path, 'auprc_prob_threshold' + args.stain.upper() + '.png'))
+		auprc_thresh_fig = auprc_thresh_plot(auprc_probs, prob_thresh, stain)
+		auprc_thresh_fig.savefig(os.path.join(output_path, 'auprc_prob_threshold_' + stain.upper() + '.png'))
+
+	if args.csv:
+		df.to_csv(csv_path, index=False)
 
 	if args.vis:
 		plt.show()

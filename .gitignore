@@ -2,5 +2,5 @@
 /.vscode
 results
 slurm
-/data
-/models/trained_models
+/models/trained_models/*
+data

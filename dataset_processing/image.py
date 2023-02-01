@@ -344,28 +344,16 @@ def get_example_params(img_path, img_class_index, num_classes, model_path=None):
             file_name_to_export,
             pretrained_model)
 
-def channel_averages(path, channelmeans=None, channelstds=None):
-    if channelmeans:
-        channel_means = channelmeans.split(',')
+def channel_averages(path):
+    channel_file = path
+    print(channel_file)
+    if os.path.exists(channel_file):
+        with open(channel_file, 'rb') as f:
+            channel_means_and_stds = pickle.load(f)
+        channel_means = channel_means_and_stds['channel_means']
+        channel_stds = channel_means_and_stds['channel_stds']
     else:
-        channel_file = os.path.join(path, 'channel_means_and_stds.pickle')
-        print(channel_file)
-        if os.path.exists(channel_file):
-            with open(channel_file, 'rb') as f:
-                channel_means_and_stds = pickle.load(f)
-            channel_means = channel_means_and_stds['channel_means']
-        else:
-            raise Warning('Values for --channelmeans must be provided if channel_means_and_stds.pickle file doesnt exist in path')
-
-    if channelstds:
-        channel_stds = channelstds.split(',')
-    else:
-        if os.path.exists(channel_file):
-            with open(channel_file, 'rb') as f:
-                channel_means_and_stds = pickle.load(f)
-            channel_stds = channel_means_and_stds['channel_stds']
-        else:
-            raise Warning('Values for --channelstds must be provided if channel_means_and_stds.pickle file doesnt exist in path')
+        raise Warning('Values for --channelmeans must be provided if channel_means_and_stds.pickle file doesnt exist in path')
 
     return channel_means, channel_stds
 

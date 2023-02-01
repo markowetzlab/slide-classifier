@@ -85,19 +85,16 @@ def precision_recall_plots(df):
 	# # Plot precision and recall across thresholds
 	fig = plt.figure()
 	ax = fig.add_subplot()
-	ax.set_title('Precision and recall across thresholds')
 
-	ax = sns.lineplot(x=df['Thresh'], y=df['value'], hue=df['variable'], ax=ax)
+	df['Thresh'] = df['Thresh'].astype(float)
+	df.plot(x='Thresh', y=['Precision', 'Recall'], ax=ax)
 
 	ax.set(xlabel='Threshold', ylabel='Value')
+	ax.set_title('Precision and recall across thresholds')
 	# ax.set_xticks(rotation=90)
 	ax.legend(loc = 'lower right')
-	ax.plot([1, 0], [0, 1],'r--')
 	ax.set_xlim([0, 1])
 	ax.set_ylim([0, 1])
-	# ax.set_xscale('log', basex=0.2)
-	ax.set_ylabel('Value')
-	ax.set_xlabel('Threshold')
 	ax.spines[['top', 'right']].set_visible(False)
 	return fig
 
@@ -108,7 +105,7 @@ def auc_thresh_plot(auc_probs, thresh_prob, biomarker):
 	ax.plot(thresh_prob, auc_probs['prob'])
 	ax.legend(loc='lower center', prop={'size': 12})
 	ax.set_xlim(-0.05, 1.05)
-	ax.set_ylim(0.6, 1.0)
+	# ax.set_ylim(0.6, 1.0)
 	ax.set_xlabel('Probability threshold for determination\nof number of tiles with ' + biomarker)
 	ax.set_ylabel('AUC-ROC for Cytosponge ' + biomarker + ' detection with\nthresholded number of tiles')
 	ax.spines[['top', 'right']].set_visible(False)
@@ -134,13 +131,12 @@ def auprc_curve_plot(auprc_cutoffs, auprc_probs, auprc_plotting, biomarker):
 	fig = plt.figure()
 	ax = fig.add_subplot()
 	ax.set_title('AUPRC with ' + biomarker + ' probability threshold of ' + str(auprc_cutoffs['tile_thresh']))
-	ax.plot(auprc_plotting['precision'], auprc_plotting['recall'], 'b', label = 'AUC = %0.2f' % max(auprc_probs['prob']))
+	ax.plot(auprc_plotting['recall'], auprc_plotting['precision'], 'b', label = 'AUC = %0.2f' % max(auprc_probs['prob']))
 	ax.legend(loc = 'lower right')
-	ax.plot([1, 0], [0, 1],'r--')
 	ax.set_xlim([0, 1])
 	ax.set_ylim([0, 1])
-	ax.set_ylabel('True Positive Rate')
-	ax.set_xlabel('Precision')
+	ax.set_xlabel('Recall')
+	ax.set_ylabel('Precision')
 	ax.spines[['top', 'right']].set_visible(False)
 	return fig
 
@@ -151,7 +147,7 @@ def auprc_thresh_plot(auprc_probs, thresh_prob, biomarker):
 	plt.plot(thresh_prob, auprc_probs['prob'])
 	ax.legend(loc='lower center', prop={'size': 12})
 	ax.set_xlim(-0.05, 1.05)
-	ax.set_ylim(0.6, 1.0)
+	# ax.set_ylim(0.6, 1.0)
 	ax.set_xlabel('Probability threshold for determination\nof number of tiles with ' + biomarker)
 	ax.set_ylabel('AUPRC for Cytosponge ' + biomarker + ' detection with\nthresholded number of tiles')
 	ax.spines[['top', 'right']].set_visible(False)
