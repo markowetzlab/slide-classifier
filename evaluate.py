@@ -1,382 +1,157 @@
-# Adam Berman
+import argparse
+import os
 
 import pandas as pd
-import numpy as np
-from sklearn.metrics import classification_report, precision_score, recall_score, f1_score
+from sklearn.metrics import classification_report
+from slidl.slide import Slide
 
-atypia_val_results = pd.read_csv('/home/cri.camres.org/berman01/progression-detection/data/FINAL_RESULTS/ATYPIA_VAL_0-99993.csv')
-atypia_test_results = pd.read_csv('/home/cri.camres.org/berman01/progression-detection/data/FINAL_RESULTS/ATYPIA_TEST_0-99993.csv')
-
-p53_val_results = pd.read_csv('/home/cri.camres.org/berman01/progression-detection/data/FINAL_RESULTS/P53_VAL_0-999.csv')
-p53_test_results = pd.read_csv('/home/cri.camres.org/berman01/progression-detection/data/FINAL_RESULTS/P53_TEST_0-999.csv')
-
-#print(p53_val_results)
-#print(p53_test_results)
-
-# -------------- VAL ------------------
-
-atypia_val_results['endo_dysplasia'] = np.where(((atypia_val_results['endoscopy'] == 'HGD/IMC') | (atypia_val_results['endoscopy'] == 'LGD')), 1, 0)
-atypia_val_results['endo_dysplasia_including_ind'] = np.where(((atypia_val_results['endoscopy'] == 'HGD/IMC') | (atypia_val_results['endoscopy'] == 'LGD') | (atypia_val_results['endoscopy'] == 'IND')), 1, 0)
-atypia_val_results['atypia_tile_count_greater_than_0'] = np.where(atypia_val_results['atypia_tile_count'] > 0, 1, 0)
-
-atypia_tile_counts = atypia_val_results['atypia_tile_count'].tolist()
-atypia_tile_count_greater_than_0 = atypia_val_results['atypia_tile_count_greater_than_0'].tolist()
-atypia_ground_truth_after_ai_review = atypia_val_results['atypia_ground_truth_after_ai_review'].tolist()
-atypia_triage_scheme = []
-atypia_hcn_triage_threshold = 0
-atypia_hcp_triage_threshold = 10
-for i, atypia_tile_count in enumerate(atypia_tile_counts):
-    if atypia_tile_count <= atypia_hcn_triage_threshold:
-        atypia_triage_scheme.append(atypia_tile_count_greater_than_0[i])
-    elif atypia_tile_count < atypia_hcp_triage_threshold:
-        atypia_triage_scheme.append(atypia_ground_truth_after_ai_review[i])
-    else:
-        atypia_triage_scheme.append(atypia_tile_count_greater_than_0[i])
-atypia_val_results['atypia_triage_scheme'] = atypia_triage_scheme
-#print(atypia_triage_scheme)
-#print(len(atypia_triage_scheme))
-#quit()
+from dataset_processing import class_parser
 
 
-p53_val_results['endo_dysplasia'] = np.where(((p53_val_results['endoscopy'] == 'HGD/IMC') | (p53_val_results['endoscopy'] == 'LGD')), 1, 0)
-p53_val_results['endo_dysplasia_including_ind'] = np.where(((p53_val_results['endoscopy'] == 'HGD/IMC') | (p53_val_results['endoscopy'] == 'LGD') | (p53_val_results['endoscopy'] == 'IND')), 1, 0)
-p53_val_results['p53_tile_count_greater_than_0'] = np.where(p53_val_results['p53_tile_count'] > 0, 1, 0)
+def parse_args():
+	parser = argparse.ArgumentParser(description='Plot inference tiles')
+	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
 
-p53_tile_counts = p53_val_results['p53_tile_count'].tolist()
-p53_tile_count_greater_than_0 = p53_val_results['p53_tile_count_greater_than_0'].tolist()
-p53_ground_truth_after_ai_review = p53_val_results['p53_ground_truth_after_ai_review'].tolist()
-p53_triage_scheme = []
-p53_hcn_triage_threshold = 0
-p53_hcp_triage_threshold = 2
-for i, p53_tile_count in enumerate(p53_tile_counts):
-    if p53_tile_count <= p53_hcn_triage_threshold:
-        p53_triage_scheme.append(p53_tile_count_greater_than_0[i])
-    elif p53_tile_count < p53_hcp_triage_threshold:
-        p53_triage_scheme.append(p53_ground_truth_after_ai_review[i])
-    else:
-        p53_triage_scheme.append(p53_tile_count_greater_than_0[i])
-p53_val_results['p53_triage_scheme'] = p53_triage_scheme
+	parser.add_argument("--he_path", default=None, help="he slides root folder")
+	parser.add_argument("--he_inference", default=None, help="path to directory containing atpyia inference file(s)")
+	parser.add_argument("--he_threshold", help="A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53)")
 
-# Only positive subset dataframe
+	parser.add_argument("--p53_path", default=None, help="p53 slides root folder")
+	parser.add_argument("--p53_inference", default=None, help="path to directory containing p53 inference file(s)")
+	parser.add_argument("--p53_threshold", help="A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53)")
 
-p53_val_results_positive_subset = p53_val_results[p53_val_results['p53_tile_count_greater_than_0'] + p53_val_results['p53_ground_truth_after_ai_review'] >= 1]
-#print(p53_val_results_positive_subset)
-#quit()
+	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
+	parser.add_argument("--output", default='results', help="path to folder where inference maps will be stored")
 
+	#class variables
+	parser.add_argument("--dysplasia_separate", action='store_false', help="Flag whether to separate the atypia of uncertain significance and dysplasia classes")
+	parser.add_argument("--respiratory_separate", action='store_false', help="Flag whether to separate the respiratory mucosa cilia and respiratory mucosa classes")
+	parser.add_argument("--gastric_separate", action='store_false', help="Flag whether to separate the tickled up columnar and gastric cardia classes")
+	parser.add_argument("--atypia_separate", action='store_false', help="Flag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other")
+	parser.add_argument("--p53_separate", action='store_false', help="Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar")
 
-# Combined dataframe
+	args = parser.parse_args()
+	return args
 
-atypiap53_val_results = atypia_val_results.merge(p53_val_results, on='case')
-#print("COMBINED VAL ROWS:", len(atypiap53_val_results.index))
-atypiap53_val_results['atypiap53_ground_truth_no_ai_review'] = np.where(((atypiap53_val_results['atypia_ground_truth_no_ai_review'] == 1) | (atypiap53_val_results['p53_ground_truth_no_ai_review'] == 1)), 1, 0)
-atypiap53_val_results['atypiap53_ground_truth_after_ai_review'] = np.where(((atypiap53_val_results['atypia_ground_truth_after_ai_review'] == 1) | (atypiap53_val_results['p53_ground_truth_after_ai_review'] == 1)), 1, 0)
-atypiap53_val_results['atypiap53_tile_count_greater_than_0'] = np.where(((atypiap53_val_results['atypia_tile_count_greater_than_0'] == 1) | (atypiap53_val_results['p53_tile_count_greater_than_0'] == 1)), 1, 0)
-atypiap53_val_results['atypiap53_triage_scheme'] = np.where(((atypiap53_val_results['atypia_triage_scheme'] == 1) | (atypiap53_val_results['p53_triage_scheme'] == 1)), 1, 0)
-#print(atypiap53_val_results)
-#quit()
-triage_class_letter = []
-for i in range(len(atypiap53_val_results.index)):
-    if atypiap53_val_results['atypia_tile_count'][i] >= atypia_hcp_triage_threshold and atypiap53_val_results['p53_tile_count'][i] >= p53_hcp_triage_threshold:
-        triage_class_letter.append('A')
-    elif atypiap53_val_results['atypia_tile_count'][i] >= atypia_hcp_triage_threshold and (atypiap53_val_results['p53_tile_count'][i] > p53_hcn_triage_threshold and atypiap53_val_results['p53_tile_count'][i] < p53_hcp_triage_threshold):
-        triage_class_letter.append('B')
-    elif atypiap53_val_results['atypia_tile_count'][i] >= atypia_hcp_triage_threshold and atypiap53_val_results['p53_tile_count'][i] <= p53_hcn_triage_threshold:
-        triage_class_letter.append('C')
-    elif (atypiap53_val_results['atypia_tile_count'][i] > atypia_hcn_triage_threshold and atypiap53_val_results['atypia_tile_count'][i] < atypia_hcp_triage_threshold) and atypiap53_val_results['p53_tile_count'][i] >= p53_hcp_triage_threshold:
-        triage_class_letter.append('D')
-    elif (atypiap53_val_results['atypia_tile_count'][i] > atypia_hcn_triage_threshold and atypiap53_val_results['atypia_tile_count'][i] < atypia_hcp_triage_threshold) and (atypiap53_val_results['p53_tile_count'][i] > p53_hcn_triage_threshold and atypiap53_val_results['p53_tile_count'][i] < p53_hcp_triage_threshold):
-        triage_class_letter.append('E')
-    elif (atypiap53_val_results['atypia_tile_count'][i] > atypia_hcn_triage_threshold and atypiap53_val_results['atypia_tile_count'][i] < atypia_hcp_triage_threshold) and atypiap53_val_results['p53_tile_count'][i] <= p53_hcn_triage_threshold:
-        triage_class_letter.append('F')
-    elif atypiap53_val_results['atypia_tile_count'][i] <= atypia_hcn_triage_threshold and atypiap53_val_results['p53_tile_count'][i] >= p53_hcp_triage_threshold:
-        triage_class_letter.append('G')
-    elif atypiap53_val_results['atypia_tile_count'][i] <= atypia_hcn_triage_threshold and (atypiap53_val_results['p53_tile_count'][i] > p53_hcn_triage_threshold and atypiap53_val_results['p53_tile_count'][i] < p53_hcp_triage_threshold):
-        triage_class_letter.append('H')
-    elif atypiap53_val_results['atypia_tile_count'][i] <= atypia_hcn_triage_threshold and atypiap53_val_results['p53_tile_count'][i] <= p53_hcn_triage_threshold:
-        triage_class_letter.append('I')
-    else:
-        raise Warning('Row does not fit into a triage class letter.')
-atypiap53_val_results['atypiap53_triage_class_letter'] = triage_class_letter
+if __name__ == '__main__':
+	args = parse_args()
 
+	he_classes = class_parser('he', args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate)
+	he_root = args.he_path
+	he_inference_root = args.he_inference
+	if args.p53_threshold is not None:
+		he_threshold = float(args.he_threshold)
+	else:
+		he_threshold = 0.99
 
+	atypia_hcn_triage_threshold = 0
+	atypia_hcp_triage_threshold = 10
 
+	p53_classes = class_parser('p53', args.p53_separate)
+	p53_root = args.p53_path
+	p53_inference_root = args.p53_inference
+	if args.p53_threshold is not None:
+		p53_threshold = float(args.p53_threshold)
+	else:
+		p53_threshold = 0.99
 
-# ------------------- TEST -----------------------
+	p53_hcn_triage_threshold = 0
+	p53_hcp_triage_threshold = 2
 
+	output_path = args.output
 
-atypia_test_results['endo_dysplasia'] = np.where(((atypia_test_results['endoscopy'] == 'HGD/IMC') | (atypia_test_results['endoscopy'] == 'LGD')), 1, 0)
-atypia_test_results['endo_dysplasia_including_ind'] = np.where(((atypia_test_results['endoscopy'] == 'HGD/IMC') | (atypia_test_results['endoscopy'] == 'LGD') | (atypia_test_results['endoscopy'] == 'IND')), 1, 0)
-atypia_test_results['atypia_tile_count_greater_than_0'] = np.where(atypia_test_results['atypia_tile_count'] > 0, 1, 0)
+	if os.path.isfile(args.labels):
+		labels = pd.read_csv(args.labels, index_col=0)
+		labels.sort_index(inplace=True)
+		labels['Atypia'] = labels['Atypia'].map(dict(Y=1, N=0))
+		labels['P53 positive'] = labels['P53 positive'].map(dict(Y=1, N=0))
+	else:
+		raise AssertionError('Not a valid path for ground truth labels.')
 
-atypia_tile_counts = atypia_test_results['atypia_tile_count'].tolist()
-atypia_tile_count_greater_than_0 = atypia_test_results['atypia_tile_count_greater_than_0'].tolist()
-atypia_ground_truth_after_ai_review = atypia_test_results['atypia_ground_truth_after_ai_review'].tolist()
-atypia_triage_scheme = []
-atypia_hcn_triage_threshold = 0
-atypia_hcp_triage_threshold = 10
-for i, atypia_tile_count in enumerate(atypia_tile_counts):
-    if atypia_tile_count <= atypia_hcn_triage_threshold:
-        atypia_triage_scheme.append(atypia_tile_count_greater_than_0[i])
-    elif atypia_tile_count < atypia_hcp_triage_threshold:
-        atypia_triage_scheme.append(atypia_ground_truth_after_ai_review[i])
-    else:
-        atypia_triage_scheme.append(atypia_tile_count_greater_than_0[i])
-atypia_test_results['atypia_triage_scheme'] = atypia_triage_scheme
-#print(atypia_triage_scheme)
-#print(len(atypia_triage_scheme))
-#quit()
+	results = []
+	for index, row in labels.iterrows():
+		case = {'CYT ID': index}
+		
+		if he_inference_root is not None:
 
+			ranked_class = 'atypia'
+			
+			he_file = row['H&E']
+			he_inference = he_file.replace(args.format, '_inference.pml')
 
-p53_test_results['endo_dysplasia'] = np.where(((p53_test_results['endoscopy'] == 'HGD/IMC') | (p53_test_results['endoscopy'] == 'LGD')), 1, 0)
-p53_test_results['endo_dysplasia_including_ind'] = np.where(((p53_test_results['endoscopy'] == 'HGD/IMC') | (p53_test_results['endoscopy'] == 'LGD') | (p53_test_results['endoscopy'] == 'IND')), 1, 0)
-p53_test_results['p53_tile_count_greater_than_0'] = np.where(p53_test_results['p53_tile_count'] > 0, 1, 0)
+			he_slide = os.path.join(he_root, he_file)
+			he_inference = os.path.join(he_inference_root, he_inference)
 
-p53_tile_counts = p53_test_results['p53_tile_count'].tolist()
-p53_tile_count_greater_than_0 = p53_test_results['p53_tile_count_greater_than_0'].tolist()
-p53_ground_truth_after_ai_review = p53_test_results['p53_ground_truth_after_ai_review'].tolist()
-p53_triage_scheme = []
-p53_hcn_triage_threshold = 0
-p53_hcp_triage_threshold = 2
-for i, p53_tile_count in enumerate(p53_tile_counts):
-    if p53_tile_count <= p53_hcn_triage_threshold:
-        p53_triage_scheme.append(p53_tile_count_greater_than_0[i])
-    elif p53_tile_count < p53_hcp_triage_threshold:
-        p53_triage_scheme.append(p53_ground_truth_after_ai_review[i])
-    else:
-        p53_triage_scheme.append(p53_tile_count_greater_than_0[i])
-p53_test_results['p53_triage_scheme'] = p53_triage_scheme
+			he_slide = Slide(he_inference, newSlideFilePath=he_slide)
+			he_tiles = he_slide.numTilesAboveClassPredictionThreshold(ranked_class, he_threshold)
+			
+			if he_tiles <= atypia_hcn_triage_threshold:
+				he_triage = 'hcn'
+			elif he_tiles < atypia_hcp_triage_threshold:
+				he_triage = 'hcp'
+			else:
+				he_triage = 'lcp'
+			
+			case.update({'Atypia GT': row['Atypia'], 'Atypia Tiles': he_tiles, 'Atypia Triage': he_triage})
+		
+		if p53_inference_root is not None:
 
-# Only positive subset dataframe
+			ranked_class = 'atypia'
+			
+			p53_file = row['H&E']
+			p53_inference = p53_file.replace(args.format, '_inference.pml')
 
-p53_test_results_positive_subset = p53_test_results[p53_test_results['p53_tile_count_greater_than_0'] + p53_test_results['p53_ground_truth_after_ai_review'] >= 1]
-#print(p53_test_results_positive_subset)
-#quit()
+			p53_slide = os.path.join(p53_root, p53_file)
+			p53_inference = os.path.join(p53_inference_root, p53_inference)
 
-# Combined dataframe
+			p53_slide = Slide(p53_inference, newSlideFilePath=p53_slide)
+			p53_tiles = p53_slide.numTilesAboveClassPredictionThreshold(ranked_class, p53_threshold)
+			
+			if p53_tiles <= p53_hcn_triage_threshold:
+				p53_triage = 'hcn'
+			elif p53_tiles < p53_hcp_triage_threshold:
+				p53_triage = 'hcp'
+			else:
+				p53_triage = 'lcp'
+			
+			case.update({'P53 GT': row['Atypia'], 'P53 Tiles': p53_tiles, 'P53 Triage': p53_triage})
 
-atypiap53_test_results = atypia_test_results.merge(p53_test_results, on='case')
-#print(atypiap53_test_results.columns)
-#quit()
-atypiap53_test_results['atypiap53_ground_truth_no_ai_review'] = np.where(((atypiap53_test_results['atypia_ground_truth_no_ai_review'] == 1) | (atypiap53_test_results['p53_ground_truth_no_ai_review'] == 1)), 1, 0)
-atypiap53_test_results['atypiap53_ground_truth_after_ai_review'] = np.where(((atypiap53_test_results['atypia_ground_truth_after_ai_review'] == 1) | (atypiap53_test_results['p53_ground_truth_after_ai_review'] == 1)), 1, 0)
-atypiap53_test_results['atypiap53_tile_count_greater_than_0'] = np.where(((atypiap53_test_results['atypia_tile_count_greater_than_0'] == 1) | (atypiap53_test_results['p53_tile_count_greater_than_0'] == 1)), 1, 0)
-atypiap53_test_results['atypiap53_triage_scheme'] = np.where(((atypiap53_test_results['atypia_triage_scheme'] == 1) | (atypiap53_test_results['p53_triage_scheme'] == 1)), 1, 0)
+		if he_inference_root is not None and p53_inference_root is not None:
+			if he_triage == 'hcp' and p53_triage == 'hcp':
+				case.update({'Triage Class': 'A'})
+			elif he_triage == 'hcp' and p53_triage == 'lcp':
+				case.update({'Traige Class': 'B'})
+			elif he_triage == 'hcp' and p53_triage == 'hcn':
+				case.update({'Traige Class': 'C'})
+			elif he_triage == 'lcp' and p53_triage == 'hcp':
+				case.update({'Traige Class': 'D'})
+			elif he_triage == 'lcp' and p53_triage == 'lcp':
+				case.update({'Traige Class': 'E'})
+			elif he_triage == 'lcp' and p53_triage == 'hcn':
+				case.update({'Traige Class': 'F'})
+			elif he_triage == 'hcn' and p53_triage == 'hcp':
+				case.update({'Traige Class': 'G'})
+			elif he_triage == 'hcn' and p53_triage == 'lcp':
+				case.update({'Traige Class': 'H'})
+			elif he_triage == 'hcn' and p53_triage == 'hcn':
+				case.update({'Traige Class': 'I'})
+			else:
+				raise Warning('Row does not fit into a triage class letter.')
 
-#print(atypiap53_test_results['atypia_tile_count'])
-#for i in range(len(atypiap53_test_results.index)):
-#    print(atypiap53_test_results['atypia_tile_count'][i])
-
-triage_class_letter = []
-for i in range(len(atypiap53_test_results.index)):
-    if atypiap53_test_results['atypia_tile_count'][i] >= atypia_hcp_triage_threshold and atypiap53_test_results['p53_tile_count'][i] >= p53_hcp_triage_threshold:
-        triage_class_letter.append('A')
-    elif atypiap53_test_results['atypia_tile_count'][i] >= atypia_hcp_triage_threshold and (atypiap53_test_results['p53_tile_count'][i] > p53_hcn_triage_threshold and atypiap53_test_results['p53_tile_count'][i] < p53_hcp_triage_threshold):
-        triage_class_letter.append('B')
-    elif atypiap53_test_results['atypia_tile_count'][i] >= atypia_hcp_triage_threshold and atypiap53_test_results['p53_tile_count'][i] <= p53_hcn_triage_threshold:
-        triage_class_letter.append('C')
-    elif (atypiap53_test_results['atypia_tile_count'][i] > atypia_hcn_triage_threshold and atypiap53_test_results['atypia_tile_count'][i] < atypia_hcp_triage_threshold) and atypiap53_test_results['p53_tile_count'][i] >= p53_hcp_triage_threshold:
-        triage_class_letter.append('D')
-    elif (atypiap53_test_results['atypia_tile_count'][i] > atypia_hcn_triage_threshold and atypiap53_test_results['atypia_tile_count'][i] < atypia_hcp_triage_threshold) and (atypiap53_test_results['p53_tile_count'][i] > p53_hcn_triage_threshold and atypiap53_test_results['p53_tile_count'][i] < p53_hcp_triage_threshold):
-        triage_class_letter.append('E')
-    elif (atypiap53_test_results['atypia_tile_count'][i] > atypia_hcn_triage_threshold and atypiap53_test_results['atypia_tile_count'][i] < atypia_hcp_triage_threshold) and atypiap53_test_results['p53_tile_count'][i] <= p53_hcn_triage_threshold:
-        triage_class_letter.append('F')
-    elif atypiap53_test_results['atypia_tile_count'][i] <= atypia_hcn_triage_threshold and atypiap53_test_results['p53_tile_count'][i] >= p53_hcp_triage_threshold:
-        triage_class_letter.append('G')
-    elif atypiap53_test_results['atypia_tile_count'][i] <= atypia_hcn_triage_threshold and (atypiap53_test_results['p53_tile_count'][i] > p53_hcn_triage_threshold and atypiap53_test_results['p53_tile_count'][i] < p53_hcp_triage_threshold):
-        triage_class_letter.append('H')
-    elif atypiap53_test_results['atypia_tile_count'][i] <= atypia_hcn_triage_threshold and atypiap53_test_results['p53_tile_count'][i] <= p53_hcn_triage_threshold:
-        triage_class_letter.append('I')
-    else:
-        raise Warning('Row does not fit into a triage class letter.')
-atypiap53_test_results['atypiap53_triage_class_letter'] = triage_class_letter
-
-#p53_val_results['endo_dysplasia'] = np.where(((p53_val_results['endoscopy'] == 'HGD/IMC') | (p53_val_results['endoscopy'] == 'LGD')), 1, 0)
-#p53_val_results['endo_dysplasia_including_ind'] = np.where(((p53_val_results['endoscopy'] == 'HGD/IMC') | (p53_val_results['endoscopy'] == 'LGD') | (p53_val_results['endoscopy'] == 'IND')), 1, 0)
-#p53_val_results['p53_tile_count_greater_than_0'] = np.where(p53_val_results['p53_tile_count'] > 1, 1, 0)
-
-#p53_test_results['endo_dysplasia'] = np.where(((p53_test_results['endoscopy'] == 'HGD/IMC') | (p53_test_results['endoscopy'] == 'LGD')), 1, 0)
-#p53_test_results['endo_dysplasia_including_ind'] = np.where(((p53_test_results['endoscopy'] == 'HGD/IMC') | (p53_test_results['endoscopy'] == 'LGD') | (p53_test_results['endoscopy'] == 'IND')), 1, 0)
-#p53_test_results['p53_tile_count_greater_than_0'] = np.where(p53_test_results['p53_tile_count'] > 1, 1, 0)
-
-#print(p53_test_results)
-
-# VALIDATION ANALYSES
-
-# Evaluate model's performance relative to pathologist ground truth
-
-# Evaluate model's performance relative to endoscopy ground truth
+		results.append(case)
 
 
-# TEST ANALYSES
+	# # Evaluate model's performance relative to pathologist ground truth
+	# print('Atypia model vs. pathologist ground truth')
+	# print(classification_report(atypia_results['atypia_ground_truth_no_ai_review'], atypia_results['atypia_tile_count_greater_than_0']))
 
-# Evaluate model's performance relative to pathologist ground truth
-print()
-print('----------------------ATYPIA VAL----------------------')
-print()
-print('Atypia val model vs. pre-AI pathologist ground truth')
-print(classification_report(atypia_val_results['atypia_ground_truth_no_ai_review'], atypia_val_results['atypia_tile_count_greater_than_0']))
-print()
-print('Atypia val model vs. post-AI pathologist ground truth')
-print(classification_report(atypia_val_results['atypia_ground_truth_after_ai_review'], atypia_val_results['atypia_tile_count_greater_than_0']))
-print()
-print('Atypia val model vs. endoscopy ground truth')
-print(classification_report(atypia_val_results['endo_dysplasia'], atypia_val_results['atypia_tile_count_greater_than_0']))
-print()
-print('Atypia val pre-AI pathologist vs. endoscopy ground truth')
-print(classification_report(atypia_val_results['endo_dysplasia'], atypia_val_results['atypia_ground_truth_no_ai_review']))
-print()
-print('Atypia val post-AI pathologist vs. endoscopy ground truth')
-print(classification_report(atypia_val_results['endo_dysplasia'], atypia_val_results['atypia_ground_truth_after_ai_review']))
-print()
-print('Atypia val atypia-only triage system vs. post-AI pathologist ground truth')
-print(classification_report(atypia_val_results['atypia_ground_truth_after_ai_review'], atypia_val_results['atypia_triage_scheme']))
-print()
-print('Atypia val atypia-only triage system vs. endoscopy ground truth')
-print(classification_report(atypia_val_results['endo_dysplasia'], atypia_val_results['atypia_triage_scheme']))
+	# print('P53 val model vs. pre-AI pathologist ground truth')
+	# print(classification_report(p53_results['p53_ground_truth_no_ai_review'], p53_results['p53_tile_count_greater_than_0']))
 
-print()
-print('----------------------P53 VAL----------------------')
-print()
-print('P53 val model vs. pre-AI pathologist ground truth')
-print(classification_report(p53_val_results['p53_ground_truth_no_ai_review'], p53_val_results['p53_tile_count_greater_than_0']))
-print()
-print('P53 val model vs. post-AI pathologist ground truth')
-print(classification_report(p53_val_results['p53_ground_truth_after_ai_review'], p53_val_results['p53_tile_count_greater_than_0']))
-print()
-print('P53 val model vs. endoscopy ground truth')
-print(classification_report(p53_val_results['endo_dysplasia'], p53_val_results['p53_tile_count_greater_than_0']))
-print()
-print('P53 val pre-AI pathologist vs. endoscopy ground truth')
-print(classification_report(p53_val_results['endo_dysplasia'], p53_val_results['p53_ground_truth_no_ai_review']))
-print()
-print('P53 val post-AI pathologist vs. endoscopy ground truth')
-print(classification_report(p53_val_results['endo_dysplasia'], p53_val_results['p53_ground_truth_after_ai_review']))
-print()
-print('P53 val P53-only triage system vs. post-AI pathologist ground truth')
-print(classification_report(p53_val_results['p53_ground_truth_after_ai_review'], p53_val_results['p53_triage_scheme']))
-print()
-print('P53 val P53-only triage system vs. endoscopy ground truth')
-print(classification_report(p53_val_results['endo_dysplasia'], p53_val_results['p53_triage_scheme']))
-print()
-print('P53 val P53-only triage system vs. endoscopy ground truth [POSITIVE SUBSET]')
-print(classification_report(p53_val_results_positive_subset['endo_dysplasia'], p53_val_results_positive_subset['p53_triage_scheme']))
+	# print('Atypia-P53 model vs. pre-AI pathologist ground truth')
+	# print(classification_report(atypiap53_results['atypiap53_ground_truth_no_ai_review'], atypiap53_results['atypiap53_tile_count_greater_than_0']))
 
+	# Emit CSVs of these datasets
+	df = pd.DataFrame.from_dict(results)
+	df.to_csv('', index_label='CYT ID')
 
-print()
-print('----------------------COMBINED VAL----------------------')
-print()
-print('Atypia-P53 val model vs. pre-AI pathologist ground truth')
-print(classification_report(atypiap53_val_results['atypiap53_ground_truth_no_ai_review'], atypiap53_val_results['atypiap53_tile_count_greater_than_0']))
-print()
-print('Atypia-P53 val model vs. post-AI pathologist ground truth')
-print(classification_report(atypiap53_val_results['atypiap53_ground_truth_after_ai_review'], atypiap53_val_results['atypiap53_tile_count_greater_than_0']))
-print()
-print('Atypia-P53 val model vs. endoscopy ground truth')
-print(classification_report(atypiap53_val_results['endo_dysplasia_x'], atypiap53_val_results['atypiap53_tile_count_greater_than_0']))
-print()
-print('Atypia-P53 val pre-AI pathologist vs. endoscopy ground truth')
-print(classification_report(atypiap53_val_results['endo_dysplasia_x'], atypiap53_val_results['atypiap53_ground_truth_no_ai_review']))
-print()
-print('Atypia-P53 val post-AI pathologist vs. endoscopy ground truth')
-print(classification_report(atypiap53_val_results['endo_dysplasia_x'], atypiap53_val_results['atypiap53_ground_truth_after_ai_review']))
-print()
-print('Atypia-P53 val Atypia-P53 triage system vs. post-AI pathologist ground truth')
-print(classification_report(atypiap53_val_results['atypiap53_ground_truth_after_ai_review'], atypiap53_val_results['atypiap53_triage_scheme']))
-print()
-print('Atypia-P53 val Atypia-P53 triage system vs. endoscopy ground truth')
-print(classification_report(atypiap53_val_results['endo_dysplasia_x'], atypiap53_val_results['atypiap53_triage_scheme']))
-#quit()
-
-#print(classification_report(atypia_test_results['p53_ground_truth_after_ai'], atypia_test_results['p53_tile_count_greater_than_0']))
-
-# Evaluate model's performance relative to pathologist ground truth
-#print(classification_report(p53_test_results['p53_ground_truth_before_ai'], p53_test_results['p53_tile_count_greater_than_0']))
-#print(classification_report(p53_test_results['p53_ground_truth_after_ai'], p53_test_results['p53_tile_count_greater_than_0']))
-
-# Evaluate model's performance relative to endoscopy ground truth
-
-# Compare model's performance on endoscopy ground truth with pre-rereview pathologist's performance on endoscopy ground truth
-
-
-print()
-print('----------------------ATYPIA TEST----------------------')
-print()
-print('Atypia test model vs. pre-AI pathologist ground truth')
-print(classification_report(atypia_test_results['atypia_ground_truth_no_ai_review'], atypia_test_results['atypia_tile_count_greater_than_0']))
-print()
-print('Atypia test model vs. post-AI pathologist ground truth')
-print(classification_report(atypia_test_results['atypia_ground_truth_after_ai_review'], atypia_test_results['atypia_tile_count_greater_than_0']))
-print()
-print('Atypia test model vs. endoscopy ground truth')
-print(classification_report(atypia_test_results['endo_dysplasia'], atypia_test_results['atypia_tile_count_greater_than_0']))
-print()
-print('Atypia test pre-AI pathologist vs. endoscopy ground truth')
-print(classification_report(atypia_test_results['endo_dysplasia'], atypia_test_results['atypia_ground_truth_no_ai_review']))
-print()
-print('Atypia test post-AI pathologist vs. endoscopy ground truth')
-print(classification_report(atypia_test_results['endo_dysplasia'], atypia_test_results['atypia_ground_truth_after_ai_review']))
-print()
-print('Atypia test atypia-only triage system vs. post-AI pathologist ground truth')
-print(classification_report(atypia_test_results['atypia_ground_truth_after_ai_review'], atypia_test_results['atypia_triage_scheme']))
-print()
-print('Atypia test atypia-only triage system vs. endoscopy ground truth')
-print(classification_report(atypia_test_results['endo_dysplasia'], atypia_test_results['atypia_triage_scheme']))
-
-print()
-print('----------------------P53 TEST----------------------')
-print()
-print('P53 test model vs. pre-AI pathologist ground truth')
-print(classification_report(p53_test_results['p53_ground_truth_no_ai_review'], p53_test_results['p53_tile_count_greater_than_0']))
-print()
-print('P53 test model vs. post-AI pathologist ground truth')
-print(classification_report(p53_test_results['p53_ground_truth_after_ai_review'], p53_test_results['p53_tile_count_greater_than_0']))
-print()
-print('P53 test model vs. endoscopy ground truth')
-print(classification_report(p53_test_results['endo_dysplasia'], p53_test_results['p53_tile_count_greater_than_0']))
-print()
-print('P53 test pre-AI pathologist vs. endoscopy ground truth')
-print(classification_report(p53_test_results['endo_dysplasia'], p53_test_results['p53_ground_truth_no_ai_review']))
-print()
-print('P53 test post-AI pathologist vs. endoscopy ground truth')
-print(classification_report(p53_test_results['endo_dysplasia'], p53_test_results['p53_ground_truth_after_ai_review']))
-print()
-print('P53 test P53-only triage system vs. post-AI pathologist ground truth')
-print(classification_report(p53_test_results['p53_ground_truth_after_ai_review'], p53_test_results['p53_triage_scheme']))
-print()
-print('P53 test P53-only triage system vs. endoscopy ground truth')
-print(classification_report(p53_test_results['endo_dysplasia'], p53_test_results['p53_triage_scheme']))
-print()
-print('P53 test P53-only triage system vs. endoscopy ground truth [POSITIVE SUBSET]')
-print(classification_report(p53_test_results_positive_subset['endo_dysplasia'], p53_test_results_positive_subset['p53_triage_scheme']))
-
-print()
-print('----------------------COMBINED TEST----------------------')
-print()
-print('Atypia-P53 test model vs. pre-AI pathologist ground truth')
-print(classification_report(atypiap53_test_results['atypiap53_ground_truth_no_ai_review'], atypiap53_test_results['atypiap53_tile_count_greater_than_0']))
-print()
-print('Atypia-P53 test model vs. post-AI pathologist ground truth')
-print(classification_report(atypiap53_test_results['atypiap53_ground_truth_after_ai_review'], atypiap53_test_results['atypiap53_tile_count_greater_than_0']))
-print()
-print('Atypia-P53 test model vs. endoscopy ground truth')
-print(classification_report(atypiap53_test_results['endo_dysplasia_x'], atypiap53_test_results['atypiap53_tile_count_greater_than_0']))
-print()
-print('Atypia-P53 test pre-AI pathologist vs. endoscopy ground truth')
-print(classification_report(atypiap53_test_results['endo_dysplasia_x'], atypiap53_test_results['atypiap53_ground_truth_no_ai_review']))
-print()
-print('Atypia-P53 test post-AI pathologist vs. endoscopy ground truth')
-print(classification_report(atypiap53_test_results['endo_dysplasia_x'], atypiap53_test_results['atypiap53_ground_truth_after_ai_review']))
-print()
-print('Atypia-P53 test Atypia-P53 triage system vs. post-AI pathologist ground truth')
-print(classification_report(atypiap53_test_results['atypiap53_ground_truth_after_ai_review'], atypiap53_test_results['atypiap53_triage_scheme']))
-print()
-print('Atypia-P53 test Atypia-P53 triage system vs. endoscopy ground truth')
-print(classification_report(atypiap53_test_results['endo_dysplasia_x'], atypiap53_test_results['atypiap53_triage_scheme']))
-
-# Emit CSVs of these datasets
-atypia_val_results.to_csv('~/Downloads/atypia_val_results.csv', index=False)
-p53_val_results.to_csv('~/Downloads/p53_val_results.csv', index=False)
-atypiap53_val_results.to_csv('~/Downloads/atypiap53_val_results.csv', index=False)
-atypia_test_results.to_csv('~/Downloads/atypia_test_results.csv', index=False)
-p53_test_results.to_csv('~/Downloads/p53_test_results.csv', index=False)
-atypiap53_test_results.to_csv('~/Downloads/atypiap53_test_results.csv', index=False)
