@@ -7,7 +7,6 @@ from slidl.slide import Slide
 
 from dataset_processing import class_parser
 
-
 def parse_args():
 	parser = argparse.ArgumentParser(description='Plot inference tiles')
 	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")

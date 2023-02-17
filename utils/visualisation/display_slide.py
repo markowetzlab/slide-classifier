@@ -12,9 +12,11 @@ class slide_image:
 	def __init__(self, slide_slide, stain, classes, **kwargs):
 		if stain == 'he':
 			self.ranked_class = 'atypia'
-		else:
+		elif stain == 'p53':
 			self.ranked_class = 'aberrant_positive_columnar'
-		
+		else:
+			self.ranked_class = 'positive'
+
 		self.classes = classes
 
 		self.slidl_slide = slide_slide

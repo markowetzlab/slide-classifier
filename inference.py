@@ -2,13 +2,13 @@
 # This file runs tile-level inference on the training, calibration and internal validation cohort
 
 import argparse
-import glob
 import os
 import pickle
 import time
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -21,8 +21,7 @@ from utils.visualisation.display_slide import slide_image
 from utils.metrics.threshold import precision_recall_plots, auc_thresh_plot, roc_thresh_plot, auprc_curve_plot, auprc_thresh_plot
 from slidl.utils.torch.WholeSlideImageDataset import WholeSlideImageDataset
 
-from sklearn.metrics import (auc, average_precision_score, confusion_matrix,
-							 f1_score, precision_recall_curve, precision_score,
+from sklearn.metrics import (average_precision_score, f1_score, precision_recall_curve, precision_score,
 							 recall_score, roc_auc_score, roc_curve)
 
 import warnings
@@ -100,6 +99,13 @@ if __name__ == '__main__':
 		else:
 			ranked_label = 'P53 positive'
 			file_name = 'P53'
+	elif stain == 'tff3':
+		ranked_class = 'positive'
+		if args.gt is not None:
+			ranked_label = args.gt
+		else:
+			ranked_label = 'TFF3 positive'
+			file_name = 'TFF3'
 	else:
 		raise AssertionError('Stain currently must be he or p53.')
 
@@ -107,7 +113,7 @@ if __name__ == '__main__':
 	trained_model, params = get_network(network, class_names=classes, pretrained=False)
 	try:
 		trained_model.load_state_dict(torch.load(args.model_path))
-	except:	
+	except: 
 		trained_model = torch.load(args.model_path)
 	
 	# Use manual batch size if one has been specified
@@ -131,24 +137,23 @@ if __name__ == '__main__':
 	trained_model.to(device)
 	trained_model.eval()
 
-	prob_thresh = np.append(np.arange(0, 0.95, 0.05), np.arange(0.95, 0.99, 0.005))
+	prob_thresh = np.append(np.arange(0, 0.90, 0.05), np.arange(0.94, 0.98, 0.001))
+	# prob_thresh = np.append(prob_thresh, np.arange(0.99, 0.995, 0.001))
+	prob_thresh = np.append(prob_thresh, np.arange(0.995, 0.9999, 0.00001))
+	prob_thresh = np.round(prob_thresh, 5)
 
 	if not os.path.exists(output_path):
 		os.makedirs(output_path, exist_ok=True)
 	print("Outputting inference to: ", output_path)
 
 	csv_path = os.path.join(output_path, network + '-' + stain + '-prediction-data.csv')
-	if os.path.isfile(csv_path):
-		df = pd.read_csv(csv_path, index_col='CYT ID')
-	else:
-		df = pd.DataFrame(columns=['CYT ID'])
+	control = pd.DataFrame(columns=['CYT ID', 'L', 'R', 'T', 'B'])
 
 	if args.channel_means and args.channel_stds:
 		channel_means = args.channel_means.split(',')
 		channel_stds = args.channel_stds.split(',')
 	else:
-		# channel_norm = args.model_path.replace(args.model_path.split('/')[-1], args.channel_norms)
-		channel_norm = args.channel_norms
+		channel_norm = args.model_path.replace(args.model_path.split('/')[-1], args.channel_norms)
 		channel_means, channel_stds = channel_averages(channel_norm)
 	if not args.silent:
 		print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
@@ -159,9 +164,11 @@ if __name__ == '__main__':
 		labels = labels.dropna(subset=[ranked_label])
 		labels.sort_index(inplace=True)
 		if not args.dataset == 'best':
-			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0, Equivocal=0))
+			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0))
 	else:
 		raise AssertionError('Not a valid path for ground truth labels.')
+
+	data_list = []
 
 	case_number = 0
 	for index, row in labels.iterrows():
@@ -186,7 +193,7 @@ if __name__ == '__main__':
 
 		if os.path.isfile(slide_output + '.pml'):
 			if not args.silent:
-				print(f"Case {index} already processed from {slide_output}")
+				print(f"Case {index} already processed")
 			with open(slide_output + '.pml', 'rb') as f:
 				tile_dict = pickle.load(f)
 			slidl_slide = Slide(slide_output + '.pml')
@@ -199,23 +206,88 @@ if __name__ == '__main__':
 			dataset = WholeSlideImageDataset(slidl_slide, foregroundOnly=args.foreground_only, transform=data_transforms)
 
 			since = time.time()
-			dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+			dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+			tile_predictions = []
 			
-			slidl_slide.inferClassifier(trained_model, classNames=classes, dataTransforms=data_transforms, numWorkers=args.num_workers, silent=args.silent)
+			with torch.no_grad():
+				for inputs in tqdm(dataloader, disable=args.silent):
+					inputTile = inputs['image'].to(device)
+					output = trained_model(inputTile)
+					output = output.to(device)
+
+					batch_prediction = torch.nn.functional.softmax(output, dim=1).cpu().data.numpy()
+
+					for index in range(len(inputTile)):
+						tileAddress = (inputs['tileAddress'][0][index].item(), inputs['tileAddress'][1][index].item())
+						preds = batch_prediction[index, ...].tolist()
+						if len(preds) != len(classes):
+							raise ValueError('Model has '+str(len(preds))+' classes but only '+str(len(classes))+' class names were provided in the classes argument')
+						prediction = {}
+						for i, pred in enumerate(preds):
+							prediction[classes[i]] = pred
+						slidl_slide.appendTag(tileAddress, 'classifierInferencePrediction', prediction)
+						tile_predictions.append(tileAddress)			
+				
 			slidl_slide.save(fileName = slide_output)
 			time_elapsed = time.time() - since
 			if not args.silent:
 				print('Inference complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
 
-		target_accuracy = slidl_slide.numTilesAboveClassPredictionThreshold(ranked_class, probabilityThresholds=[round(prob, 3) for prob in prob_thresh])
+		tile_predictions = []
+		for tile_address, tile_entry in slidl_slide.tileDictionary.items():
+			if 'classifierInferencePrediction' in tile_entry:
+				tile_predictions.append(tile_address)
+
+		#P53 slides in Delta contain a positive control tissue which skews analysis
+		X_tiles = slidl_slide.numTilesInX
+		Y_tiles = slidl_slide.numTilesInY
+		X_control = round(X_tiles/4)
+		Y_control = round(Y_tiles/4)
+
+		# target_accuracy = slidl_slide.numTilesAboveClassPredictionThreshold(ranked_class, probabilityThresholds=[round(prob, 3) for prob in prob_thresh])
+		target_accuracy = []
+
+		# control_location = []
+		
+		# tiles_middle = 0
+		# tiles_left = 0
+		# tiles_right = 0
+		# tiles_top = 0
+		# tiles_bottom = 0
+
+		for threshold in prob_thresh:
+			tiles = 0
+
+			for addr in tile_predictions:
+				if ranked_class not in slidl_slide.tileDictionary[addr]['classifierInferencePrediction']:
+					raise ValueError(ranked_class +' not in classifierInferencePrediction at tile '+str(addr))
+				if slidl_slide.tileDictionary[addr]['classifierInferencePrediction'][ranked_class] >= threshold:
+					tiles += 1
+					# if stain == 'p53' and args.dataset == 'delta':
+						# if addr[0] < X_control:
+							# tiles_left += 1
+							# continue
+						# elif X_tiles - X_control < addr[0]:
+							# tiles_right += 1
+							# continue
+						# elif addr[1] < Y_control:
+							# tiles_top += 1
+							# continue
+						# elif Y_tiles - Y_control < addr[1]:
+							# tiles_bottom += 1
+							# continue
+						# else:
+							# tiles_middle += 1
+			target_accuracy.append(tiles)
 
 		data = {'CYT ID': index, 'Case Path': case_file, 'Ground Truth Label': int(row[ranked_label])}
 
-		tile_cols = [ranked_class + ' > ' + str(round(prob, 3)) for prob in prob_thresh]
+		tile_cols = [ranked_class + ' > ' + str(prob) for prob in prob_thresh]
 		tile_data = dict(zip(tile_cols, [int(i) for i in target_accuracy]))
 		data.update(tile_data)
+		data_list.append(data)
 
-		df = pd.concat([df, pd.DataFrame([data]).set_index('CYT ID')])
+		# df = pd.concat([df, pd.DataFrame([data]).set_index('CYT ID')])
 
 		if args.vis:
 			slide_im = slide_image(slidl_slide, stain, classes)
@@ -224,11 +296,16 @@ if __name__ == '__main__':
 				os.makedirs(im_path)
 			slide_im.plot_thumbnail(case_id=index, target=ranked_class)
 			if args.thumbnail:
-				slide_im.save(im_path, case_path.replace(args.format, "_thumbnail"))
+				slide_im.save(im_path, case_file.replace(args.format, "_thumbnail"))
 			slide_im.draw_class(target = ranked_class)
 			slide_im.plot_class(target = ranked_class)
-			plt.show()
-			slide_im.save(im_path, case_path.replace(args.format, "_" + ranked_class))
+			slide_im.save(im_path, case_file.replace(args.format, "_" + ranked_class))
+			# plt.show()
+			plt.close('all')
+
+	df = pd.DataFrame.from_dict(data_list)
+	if args.csv:
+		df.to_csv(csv_path, index_label='CYT ID')
 
 	if args.stats:
 		cutoff_prob = []
@@ -241,7 +318,7 @@ if __name__ == '__main__':
 		
 		auprc_cutoffs = {}
 		auprc_probs = {}
-		auprc_plotting = {}	
+		auprc_plotting = {} 
 		auprc_data = []
 		
 		fpr_data = []
@@ -255,6 +332,7 @@ if __name__ == '__main__':
 		binary_f1 = []
 
 		gt_col = df['Ground Truth Label']
+		gt = gt_col.tolist()
 
 		for thresh in tile_cols:
 			pred_col = df[thresh]
@@ -271,15 +349,13 @@ if __name__ == '__main__':
 			recall_data.append(recall)
 	
 			pred = (pred_col > 0).astype(int).tolist()
-			gt = gt_col.tolist()
 	
 			binary_precision.append(precision_score(gt, pred))
 			binary_recall.append(recall_score(gt, pred))
 			binary_f1.append(f1_score(gt, pred))
 
-		thresh_prec_rec_df = pd.DataFrame(list(zip([str(round(p, 3)) for p in prob_thresh], binary_precision, binary_recall, binary_f1)), columns=['Thresh', 'Precision', 'Recall', 'F1'])
+		thresh_prec_rec_df = pd.DataFrame(list(zip([str(p) for p in prob_thresh], binary_precision, binary_recall, binary_f1)), columns=['Thresh', 'Precision', 'Recall', 'F1'])
 		if args.csv:
-			import ipdb; ipdb.set_trace()
 			thresh_prec_rec_df.to_csv(csv_path.replace('prediction-data', 'results'))
 			
 		max_auc = max(auc_data)
@@ -319,9 +395,6 @@ if __name__ == '__main__':
 
 		auprc_thresh_fig = auprc_thresh_plot(auprc_probs, prob_thresh, stain)
 		auprc_thresh_fig.savefig(os.path.join(output_path, 'auprc_prob_threshold_' + stain.upper() + '.png'))
-
-	if args.csv:
-		df.to_csv(csv_path, index=False)
 
 	if args.vis:
 		plt.show()
