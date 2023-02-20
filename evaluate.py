@@ -104,8 +104,39 @@ if __name__ == '__main__':
 			p53_inference = os.path.join(p53_inference_root, p53_inference)
 
 			p53_slide = Slide(p53_inference, newSlideFilePath=p53_slide)
+
+			#P53 slides in Delta contain a positive control tissue which skews analysis	
+			X_tiles = p53_slide.numTilesInX
+			Y_tiles = p53_slide.numTilesInY
+			X_control = round(X_tiles/4)
+			Y_control = round(Y_tiles/4)
+			control_location = []
+			
+			vertical_middle = 0
+			tiles_left = 0
+			tiles_right = 0
+
+			horizontal_middle = 0
+			tiles_top = 0
+			tiles_bottom = 0
+
 			p53_tiles = p53_slide.numTilesAboveClassPredictionThreshold(ranked_class, p53_threshold)
 			
+			for addr in p53_tiles:
+				if addr[0] < X_control:
+					tiles_left += 1
+				elif X_tiles - X_control < addr[0]:
+					tiles_right += 1
+				else:
+					vertical_middle += 1
+				
+				if addr[1] < Y_control:
+					tiles_top += 1
+				elif Y_tiles - Y_control < addr[1]:
+					tiles_bottom += 1
+				else:
+					horizontal_middle += 1
+
 			if p53_tiles <= p53_hcn_triage_threshold:
 				p53_triage = 'hcn'
 			elif p53_tiles < p53_hcp_triage_threshold:
@@ -152,5 +183,5 @@ if __name__ == '__main__':
 
 	# Emit CSVs of these datasets
 	df = pd.DataFrame.from_dict(results)
-	df.to_csv('', index_label='CYT ID')
+	df.to_csv(os.path.join(output_path,'triage_results.csv'), index_label='CYT ID')
 

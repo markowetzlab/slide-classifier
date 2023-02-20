@@ -78,10 +78,7 @@ if __name__ == '__main__':
 		case_inference = os.path.join(inference_path, inference_file)
 
 		slidl_slide = Slide(case_inference)
-		import ipdb; ipdb.set_trace()
 		thumbnail = slidl_slide.thumbnail(level=4)
-
-		td = pickle.load(open(case_inference, "rb"))
 
 		slide_name = os.path.join(output_path, slide_file.replace(".ndpi", ""))
 
@@ -92,7 +89,7 @@ if __name__ == '__main__':
 		class_masks[ranked_class] = np.zeros((slidl_slide.numTilesInX, slidl_slide.numTilesInY)[::-1])
 		ranked_dict = {}
 
-		for tile_address,tile_entry in td['tileDictionary'].items():
+		for tile_address,tile_entry in slidl_slide.tileDictionary['tileDictionary'].items():
 			for idx, class_name in enumerate(classes):
 				# extract target tiles
 				if args.extract:

@@ -93,7 +93,7 @@ def precision_recall_plots(df):
 	ax.set_title('Precision and recall across thresholds')
 	# ax.set_xticks(rotation=90)
 	ax.legend(loc = 'lower right')
-	ax.set_xlim([0, 1])
+	ax.set_xlim([0.97, 1])
 	ax.set_ylim([0, 1])
 	ax.spines[['top', 'right']].set_visible(False)
 	return fig

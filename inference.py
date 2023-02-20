@@ -137,9 +137,8 @@ if __name__ == '__main__':
 	trained_model.to(device)
 	trained_model.eval()
 
-	prob_thresh = np.append(np.arange(0, 0.90, 0.05), np.arange(0.94, 0.98, 0.001))
+	prob_thresh = np.append(np.arange(0, 0.90, 0.05), np.arange(0.94, 0.99, 0.005))
 	# prob_thresh = np.append(prob_thresh, np.arange(0.99, 0.995, 0.001))
-	prob_thresh = np.append(prob_thresh, np.arange(0.995, 0.9999, 0.00001))
 	prob_thresh = np.round(prob_thresh, 5)
 
 	if not os.path.exists(output_path):
@@ -161,7 +160,8 @@ if __name__ == '__main__':
 
 	if os.path.isfile(args.labels):
 		labels = pd.read_csv(args.labels, index_col=0)
-		labels = labels.dropna(subset=[ranked_label])
+		# labels = labels.dropna(subset=[ranked_label])
+		labels = labels.fillna(0)
 		labels.sort_index(inplace=True)
 		if not args.dataset == 'best':
 			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0))
@@ -194,9 +194,7 @@ if __name__ == '__main__':
 		if os.path.isfile(slide_output + '.pml'):
 			if not args.silent:
 				print(f"Case {index} already processed")
-			with open(slide_output + '.pml', 'rb') as f:
-				tile_dict = pickle.load(f)
-			slidl_slide = Slide(slide_output + '.pml')
+			slidl_slide = Slide(slide_output + '.pml', newSlideFilePath=case_path)
 		else:
 			slidl_slide = Slide(case_path).setTileProperties(tileSize=tile_size, tileOverlap=float(args.overlap))
 
@@ -238,56 +236,22 @@ if __name__ == '__main__':
 			if 'classifierInferencePrediction' in tile_entry:
 				tile_predictions.append(tile_address)
 
-		#P53 slides in Delta contain a positive control tissue which skews analysis
-		X_tiles = slidl_slide.numTilesInX
-		Y_tiles = slidl_slide.numTilesInY
-		X_control = round(X_tiles/4)
-		Y_control = round(Y_tiles/4)
-
-		# target_accuracy = slidl_slide.numTilesAboveClassPredictionThreshold(ranked_class, probabilityThresholds=[round(prob, 3) for prob in prob_thresh])
 		target_accuracy = []
-
-		# control_location = []
-		
-		# tiles_middle = 0
-		# tiles_left = 0
-		# tiles_right = 0
-		# tiles_top = 0
-		# tiles_bottom = 0
-
 		for threshold in prob_thresh:
 			tiles = 0
-
 			for addr in tile_predictions:
 				if ranked_class not in slidl_slide.tileDictionary[addr]['classifierInferencePrediction']:
 					raise ValueError(ranked_class +' not in classifierInferencePrediction at tile '+str(addr))
 				if slidl_slide.tileDictionary[addr]['classifierInferencePrediction'][ranked_class] >= threshold:
 					tiles += 1
-					# if stain == 'p53' and args.dataset == 'delta':
-						# if addr[0] < X_control:
-							# tiles_left += 1
-							# continue
-						# elif X_tiles - X_control < addr[0]:
-							# tiles_right += 1
-							# continue
-						# elif addr[1] < Y_control:
-							# tiles_top += 1
-							# continue
-						# elif Y_tiles - Y_control < addr[1]:
-							# tiles_bottom += 1
-							# continue
-						# else:
-							# tiles_middle += 1
 			target_accuracy.append(tiles)
 
-		data = {'CYT ID': index, 'Case Path': case_file, 'Ground Truth Label': int(row[ranked_label])}
+		data = {'CYT ID': index, 'Case Path': case_file, 'Ground Truth Label': row[ranked_label]}
 
 		tile_cols = [ranked_class + ' > ' + str(prob) for prob in prob_thresh]
 		tile_data = dict(zip(tile_cols, [int(i) for i in target_accuracy]))
 		data.update(tile_data)
 		data_list.append(data)
-
-		# df = pd.concat([df, pd.DataFrame([data]).set_index('CYT ID')])
 
 		if args.vis:
 			slide_im = slide_image(slidl_slide, stain, classes)
