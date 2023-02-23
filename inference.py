@@ -137,16 +137,17 @@ if __name__ == '__main__':
 	trained_model.to(device)
 	trained_model.eval()
 
-	prob_thresh = np.append(np.arange(0, 0.90, 0.05), np.arange(0.94, 0.99, 0.005))
-	# prob_thresh = np.append(prob_thresh, np.arange(0.99, 0.995, 0.001))
-	prob_thresh = np.round(prob_thresh, 5)
+	prob_thresh = np.append(np.arange(0, 0.9, 0.1), np.arange(0.91, 0.99, 0.01))
+	# prob_thresh = np.append(prob_thresh, np.arange(0.99, 0.998, 0.0001))
+	prob_thresh = np.append(prob_thresh, np.arange(0.999, 0.9999, 0.000001))
+	# prob_thresh = np.append(prob_thresh, np.arange(0.99, 1.0, 0.001))
+	prob_thresh = np.round(prob_thresh, 7)
 
 	if not os.path.exists(output_path):
 		os.makedirs(output_path, exist_ok=True)
 	print("Outputting inference to: ", output_path)
 
 	csv_path = os.path.join(output_path, network + '-' + stain + '-prediction-data.csv')
-	control = pd.DataFrame(columns=['CYT ID', 'L', 'R', 'T', 'B'])
 
 	if args.channel_means and args.channel_stds:
 		channel_means = args.channel_means.split(',')
@@ -161,7 +162,7 @@ if __name__ == '__main__':
 	if os.path.isfile(args.labels):
 		labels = pd.read_csv(args.labels, index_col=0)
 		# labels = labels.dropna(subset=[ranked_label])
-		labels = labels.fillna(0)
+		labels[ranked_label] = labels[ranked_label].fillna('N')
 		labels.sort_index(inplace=True)
 		if not args.dataset == 'best':
 			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0))
@@ -184,7 +185,7 @@ if __name__ == '__main__':
 			print(f'File {case_path} not found.')
 			continue
 		if not args.silent:
-			print(f'Processing case {case_number}/{len(labels)}: {index} from {case_file}')
+			print(f'Processing case {case_number}/{len(labels)}: ', end='')
 
 		inference_output = os.path.join(output_path, 'inference')
 		if not os.path.exists(inference_output):
@@ -231,18 +232,13 @@ if __name__ == '__main__':
 			if not args.silent:
 				print('Inference complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
 
-		tile_predictions = []
-		for tile_address, tile_entry in slidl_slide.tileDictionary.items():
-			if 'classifierInferencePrediction' in tile_entry:
-				tile_predictions.append(tile_address)
-
 		target_accuracy = []
 		for threshold in prob_thresh:
 			tiles = 0
-			for addr in tile_predictions:
-				if ranked_class not in slidl_slide.tileDictionary[addr]['classifierInferencePrediction']:
-					raise ValueError(ranked_class +' not in classifierInferencePrediction at tile '+str(addr))
-				if slidl_slide.tileDictionary[addr]['classifierInferencePrediction'][ranked_class] >= threshold:
+			for tile_address, tile_entry in slidl_slide.tileDictionary.items():
+				if ranked_class not in tile_entry['classifierInferencePrediction']:
+					raise ValueError(ranked_class +' not in classifierInferencePrediction at tile '+str(tile_address))
+				if tile_entry['classifierInferencePrediction'][ranked_class] >= threshold:
 					tiles += 1
 			target_accuracy.append(tiles)
 
@@ -321,23 +317,21 @@ if __name__ == '__main__':
 		thresh_prec_rec_df = pd.DataFrame(list(zip([str(p) for p in prob_thresh], binary_precision, binary_recall, binary_f1)), columns=['Thresh', 'Precision', 'Recall', 'F1'])
 		if args.csv:
 			thresh_prec_rec_df.to_csv(csv_path.replace('prediction-data', 'results'))
-			
+
 		max_auc = max(auc_data)
 		max_auc_idx = auc_data.index(max_auc)
-		print('Probability: ' + str(prob_thresh[max_auc_idx]), 'AUC: ' + str(auc_data[max_auc_idx]))
+		print('Upper Threshold: ' + str(prob_thresh[max_auc_idx]), 'AUC: ' + str(auc_data[max_auc_idx]))
 	
-		cutoff_prob.append(round(prob_thresh[max_auc_idx],6))
+		cutoff_prob.append(round(prob_thresh[max_auc_idx], 6))
 		cutoffs['tile_thresh'] = round(prob_thresh[max_auc_idx], 7)
 		auc_probs['prob'] = auc_data
 	
 		auc_plotting['fpr'] = fpr_data[max_auc_idx]
 		auc_plotting['tpr'] = tpr_data[max_auc_idx]
-	
-		print('-'*10)
-	
+		
 		max_auprc = max(auprc_data)
 		max_auprc_idx = auprc_data.index(max_auprc)
-		print('Probability: ' + str(prob_thresh[max_auprc_idx]), 'AUPRC: ' + str(auprc_data[max_auprc_idx]))
+		print('Lower Threshold: ' + str(prob_thresh[max_auprc_idx]), 'AUPRC: ' + str(auprc_data[max_auprc_idx]))
 		
 		auprc_cutoff_prob.append(round(prob_thresh[max_auprc_idx], 6))
 		auprc_cutoffs['tile_thresh'] = prob_thresh[max_auprc_idx]
@@ -345,10 +339,10 @@ if __name__ == '__main__':
 		auprc_plotting['precision'] = precision_data[max_auprc_idx]
 		auprc_plotting['recall'] = recall_data[max_auprc_idx]
 
-		pr_fig = precision_recall_plots(thresh_prec_rec_df)
+		pr_fig = precision_recall_plots(thresh_prec_rec_df, 0.999, 1)
 		pr_fig.savefig(os.path.join(output_path, 'pr_curve_' + stain.upper() + '.png'))
 
-		auc_fig = auc_thresh_plot(auc_probs, prob_thresh, stain)
+		auc_fig = auc_thresh_plot(auc_probs, prob_thresh, stain, x_min=0.9)
 		auc_fig.savefig(os.path.join(output_path, 'auc_prob_threshold_' + stain.upper() + '.png'))
 
 		roc_fig = roc_thresh_plot(cutoffs, auc_probs, auc_plotting, stain)

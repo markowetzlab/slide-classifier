@@ -10,7 +10,6 @@ import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from sklearn.metrics import (auc, average_precision_score, confusion_matrix,
                              f1_score, precision_recall_curve, precision_score,
                              recall_score, roc_auc_score, roc_curve)
@@ -81,7 +80,7 @@ def generate_stats():
 	return auc_data, auprc_data, fpr_data, tpr_data, precision_data, recall_data, binary_recall, binary_precision, binary_f1
 
 # PLOTS
-def precision_recall_plots(df):
+def precision_recall_plots(df, x_min=0, x_max=1):
 	# # Plot precision and recall across thresholds
 	fig = plt.figure()
 	ax = fig.add_subplot()
@@ -92,19 +91,19 @@ def precision_recall_plots(df):
 	ax.set(xlabel='Threshold', ylabel='Value')
 	ax.set_title('Precision and recall across thresholds')
 	# ax.set_xticks(rotation=90)
-	ax.legend(loc = 'lower right')
-	ax.set_xlim([0.97, 1])
+	ax.legend(loc = 'upper left')
+	ax.set_xlim([x_min, x_max])
 	ax.set_ylim([0, 1])
 	ax.spines[['top', 'right']].set_visible(False)
 	return fig
 
-def auc_thresh_plot(auc_probs, thresh_prob, biomarker):
+def auc_thresh_plot(auc_probs, thresh_prob, biomarker, x_min=0, x_max=1):
 	# Plot AUC at each threshold to determine best probability threshold
 	fig = plt.figure(figsize=(7.5,6))
 	ax = fig.add_subplot()
 	ax.plot(thresh_prob, auc_probs['prob'])
 	# ax.legend(loc='lower center', prop={'size': 12})
-	ax.set_xlim(-0.05, 1.05)
+	ax.set_xlim(x_min, x_max)
 	# ax.set_ylim(0.6, 1.0)
 	ax.set_xlabel('Probability threshold for determination\nof number of tiles with ' + biomarker)
 	ax.set_ylabel('AUC-ROC for Cytosponge ' + biomarker + ' detection with\nthresholded number of tiles')
