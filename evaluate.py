@@ -132,7 +132,7 @@ if __name__ == '__main__':
 					control_loc = controls.loc[index]
 					p53_tiles = 0
 					for tile_address, tile_entry in p53_slide.tileDictionary.items():
-						if p53_slide.tileDictionary[tile_address]['classifierInferencePrediction'][ranked_class] >= p53_threshold:
+						if tile_entry[ranked_class] >= p53_threshold:
 							if tile_address[0] < X_control and control_loc['L'] == 1:
 								continue
 							elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
@@ -235,21 +235,23 @@ if __name__ == '__main__':
 		df['Atypia Results'] = (df['Atypia Tiles'] > 0).astype(int)
 		results = df['Atypia Results'].astype(int).tolist()
 		gt = df['Atypia GT'].astype(int).tolist()
-		
-		# Evaluate model's performance relative to pathologist ground truth
-		print('Atypia model vs. pathologist ground truth')
-		print(classification_report(gt, results))
+
 		tn, fp, fn, tp = confusion_matrix(gt, results).ravel()
 		auc = roc_auc_score(gt, results)
 		precision = precision_score(gt, results)
 		recall = recall_score(gt, results)
 		f1 = f1_score(gt, results)
 
+		# Evaluate model's performance relative to pathologist ground truth
+		print('Atypia model vs. pathologist ground truth\n')
 		print('AUC: ', auc)
 		print('Sensitivity: ', recall)
 		print('Specificity: ', tn/(tn+fp))
 		print('Precision: ', precision)
-		print('F1: ', f1)
+		print('F1: ', f1, '\n')
+		print(confusion_matrix(gt, results))
+
+		print(classification_report(gt, results))
 
 	if p53_inference_root is not None:
 		if args.csv:
@@ -258,20 +260,22 @@ if __name__ == '__main__':
 		df['P53 Results'] = (df['P53 Tiles'] > 0).astype(int)
 		results = df['P53 Results'].astype(int).tolist()
 		gt = df['P53 GT'].astype(int).tolist()
-
-		print('P53 model vs. pathologist ground truth')
-		print(classification_report(gt, results))
+		
 		tn, fp, fn, tp = confusion_matrix(gt, results).ravel()
 		auc = roc_auc_score(gt, results)
 		precision = precision_score(gt, results)
 		recall = recall_score(gt, results)
 		f1 = f1_score(gt, results)
-
+		
+		print('P53 model vs. pathologist ground truth\n')
 		print('AUC: ', auc)
 		print('Sensitivity: ', recall)
 		print('Specificity: ', tn/(tn+fp))
 		print('Precision: ', precision)
-		print('F1: ', f1)
+		print('F1: ', f1, '\n')
+		print(confusion_matrix(gt, results))
+		
+		print(classification_report(gt, results))
 
 	if he_inference_root is not None and p53_inference_root is not None:
 		df.loc[df['Atypia Results'] >= 1 or df['P53 Results'] >= 1, 'Results'] =  1

@@ -55,7 +55,7 @@ if __name__ == '__main__':
 	elif stain == 'p53':
 		ranked_class = 'aberrant_positive_columnar'
 		ranked_label = 'P53 positive'
-		controls = pd.read_csv(os.path.join(inference_path, 'controls.csv'))
+		controls = pd.read_csv('data/controls.csv', index_col='CYT ID')
 	elif stain == 'tff3':
 		ranked_class = 'positive'
 		ranked_label = 'TFF3 positive'
@@ -83,6 +83,8 @@ if __name__ == '__main__':
 
 		if args.extract:
 			slide_im = pv.Image.new_from_file(slide_file, level=0)
+			extract = args.extract
+			extract_sf = len(str(extract).strip('0')) - 1
 
 		class_masks = {}
 		class_masks[ranked_class] = np.zeros((slidl_slide.numTilesInX, slidl_slide.numTilesInY)[::-1])
@@ -95,14 +97,15 @@ if __name__ == '__main__':
 			Y_control = round(Y_tiles/4)
 			control_loc = controls.loc[index]
 
-		for tile_address,tile_entry in slidl_slide.tileDictionary.items():
-			for class_name in classes:
+		max_threshold = 0
+		for tile_address, tile_entry in slidl_slide.tileDictionary.items():
+			for class_name, prob in tile_entry['classifierInferencePrediction'].items():
 				# extract target tiles
 				if args.extract:
 					if class_name == ranked_class:
-						if args.stain == 'p53':
-							prob = tile_entry['classifierInferencePrediction'][class_name] if 'classifierInferencePrediction' in tile_entry else 0
-							if prob >= float(args.extract): # tile is considered target
+						# max_threshold = max(prob, max_threshold)
+						if round(prob, extract_sf) >= float(args.extract): #tile is considered target
+							if args.stain == 'p53':
 								if tile_address[0] < X_control and control_loc['L'] == 1:
 									continue
 								elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
@@ -114,34 +117,28 @@ if __name__ == '__main__':
 								else:
 									# SAVE TARGET TILE ASAP ANNOTATION FILE
 									ranked_dict[str(prob)+'_'+str(tile_entry['x'])+'_'+str(tile_entry['y'])] = {ranked_class+'_probability': prob, 'x': tile_entry['x'], 'y': tile_entry['y'], 'width': tile_entry['width']}
-						else:
-							prob = tile_entry['classifierInferencePrediction'][class_name] if 'classifierInferencePrediction' in tile_entry else 0
-							if prob >= float(args.extract): # tile is considered target
+							else:
 								# SAVE TARGET TILE ASAP ANNOTATION FILE
 								ranked_dict[str(prob)+'_'+str(tile_entry['x'])+'_'+str(tile_entry['y'])] = {ranked_class+'_probability': prob, 'x': tile_entry['x'], 'y': tile_entry['y'], 'width': tile_entry['width']}
-	
-								if args.tiles:
-									# SAVE TARGET TILES
-									if not os.path.exists(os.path.join(output_path, ranked_class+'_tiles', slide_file, ranked_class + '_' + str(prob) + '_' + str(
-										tile_entry['x']) + '_' + str(tile_entry['y']) + '_' + str(tile_entry['width']) + '.jpg')):
-										try:
-											target_area = slide_im.extract_area(
-												tile_entry['x'], tile_entry['y'], tile_entry['width'], tile_entry['height'])
-											os.makedirs(os.path.join(output_path, ranked_class+'_tiles', slide_name), exist_ok=True)
-											target_area.write_to_file(os.path.join(output_path, ranked_class+'_tiles', slide_name, ranked_class + '_' + str(prob) + '_' + str(
-												tile_entry['x']) + '_' + str(tile_entry['y']) + '_' + str(tile_entry['width']) + '.jpg'), Q=100)
-											print('Made target tile')
-										except:
-											print('Skipping tile that goes beyond the edge of the WSI...')
-									else:
-										print('target tile already exists, skipping...')
+						else:
+							if args.stain == 'p53':
+								if tile_address[0] < X_control and control_loc['L'] == 1:
+									continue
+								elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
+									continue
+								elif Y_tiles - Y_control < tile_address[1] and (control_loc['B'] == 1 and control_loc['L'] == 0 and control_loc['R'] == 0):
+									continue
+								elif tile_address[1] < Y_control and (control_loc['T'] == 1 and control_loc['L'] == 0 and control_loc['R'] == 0):
+									continue
+								else:
+									max_threshold = max(prob, max_threshold)
 
 				if ranked_class:
 					if (class_name == ranked_class):
-						class_masks[class_name][tile_address[1],tile_address[0]] = tile_entry['classifierInferencePrediction'][class_name] if 'classifierInferencePrediction' in tile_entry else 0
+						class_masks[class_name][tile_address[1],tile_address[0]] = prob
 				else:
-					class_masks[class_name][tile_address[1],tile_address[0]] = tile_entry['classifierInferencePrediction'][class_name] if 'classifierInferencePrediction' in tile_entry else 0
-
+					class_masks[class_name][tile_address[1],tile_address[0]] = prob
+	
 		# Make ASAP file
 		xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
 		xml_tail = 	"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="atypia" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
@@ -168,8 +165,25 @@ if __name__ == '__main__':
 					annotation_file.write(xml_header + xml_annotations + xml_tail)
 			else:
 				print('Automated annotation file already exists...')
+				
+			if args.tiles:
+				# SAVE TARGET TILES
+				if not os.path.exists(os.path.join(output_path, ranked_class+'_tiles', slide_file, ranked_class + '_' + str(prob) + '_' + str(
+					tile_info['x']) + '_' + str(tile_info['y']) + '_' + str(tile_info['width']) + '.jpg')):
+					for key, tile_info in sorted(ranked_dict.items(), reverse=True):
+						try:
+							target_area = slide_im.extract_area(
+								tile_info['x'], tile_info['y'], tile_info['width'], tile_info['height'])
+							os.makedirs(os.path.join(output_path, ranked_class+'_tiles', slide_name), exist_ok=True)
+							target_area.write_to_file(os.path.join(output_path, ranked_class+'_tiles', slide_name, ranked_class + '_' + str(prob) + '_' + str(
+								tile_info['x']) + '_' + str(tile_info['y']) + '_' + str(tile_info['width']) + '.jpg'), Q=100)
+							print('Made target tile')
+						except:
+							print('Skipping tile that goes beyond the edge of the WSI...')
+				else:
+					print('target tile already exists, skipping...')
 		else:
-			print(f'No tiles found {index}.')
+			print(f'No tiles found {index}. Max threshold: {max_threshold}')
 
 		if args.vis:
 			slide_im = slide_image(slidl_slide, stain, classes)
