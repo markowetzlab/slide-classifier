@@ -68,7 +68,6 @@ if __name__ == '__main__':
 
 	if args.from_file:
 		df = pd.read_csv(args.from_file)
-
 	else:
 		if os.path.isfile(args.labels):
 			labels = pd.read_csv(args.labels, index_col=0)
@@ -88,7 +87,6 @@ if __name__ == '__main__':
 		for index, row in labels.iterrows():
 			process += 1
 			print('Processing case: ', index, f'({process}/{len(labels)})\r', end="")
-			# print('Processing case: ', index, f'({process}/{len(labels)})')
 			case = {'CYT ID': index}
 			
 			if he_inference_root is not None:
@@ -105,12 +103,12 @@ if __name__ == '__main__':
 				
 				if he_tiles <= atypia_hcn_triage_threshold:
 					he_triage = 'hcn'
-				elif he_tiles > atypia_hcp_triage_threshold:
+				elif he_tiles >= atypia_hcp_triage_threshold:
 					he_triage = 'hcp'
 				else:
 					he_triage = 'lcp'
 				
-				case.update({'Atypia GT': row['Atypia'], 'Atypia Tiles': he_tiles, 'Atypia Triage': he_triage})
+				case.update({'H&E Case': he_file, 'Atypia GT': row['Atypia'], 'Atypia Tiles': he_tiles, 'Atypia Triage': he_triage})
 			
 			if p53_inference_root is not None:
 				ranked_class = 'aberrant_positive_columnar'
@@ -132,7 +130,7 @@ if __name__ == '__main__':
 					control_loc = controls.loc[index]
 					p53_tiles = 0
 					for tile_address, tile_entry in p53_slide.tileDictionary.items():
-						if tile_entry[ranked_class] >= p53_threshold:
+						if tile_entry['classifierInferencePrediction'][ranked_class] >= p53_threshold:
 							if tile_address[0] < X_control and control_loc['L'] == 1:
 								continue
 							elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
@@ -197,7 +195,7 @@ if __name__ == '__main__':
 				else:
 					p53_triage = 'lcp'
 				
-				case.update({'P53 GT': row['P53 positive'], 'P53 Tiles': p53_tiles, 'P53 Triage': p53_triage})
+				case.update({'P53 Case': p53_file, 'P53 GT': row['P53 positive'], 'P53 Tiles': p53_tiles, 'P53 Triage': p53_triage})
 
 			if he_inference_root is not None and p53_inference_root is not None:
 				if row['Atypia'] == 1 or row['P53 positive'] == 1:

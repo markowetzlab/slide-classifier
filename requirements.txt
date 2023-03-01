@@ -9,3 +9,4 @@ shapely
 torch
 torchvision
 slidl
+geojson

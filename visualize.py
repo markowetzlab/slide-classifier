@@ -1,5 +1,6 @@
 import argparse
 import os
+import geojson
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,6 +30,9 @@ def parse_args():
 	parser.add_argument("--gastric_separate", action='store_false', help="Flag whether to separate the tickled up columnar and gastric cardia classes")
 	parser.add_argument("--atypia_separate", action='store_false', help="Flag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other")
 	parser.add_argument("--p53_separate", action='store_false', help="Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar")
+
+	parser.add_argument("--asap", action='store_true', help='Output annotation file in ASAP .xml format')
+	parser.add_argument("--qupath", action='store_true', help='Output annotation file in QuPath .geojson format')
 
 	parser.add_argument("--extract", default=None, help="A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53) are extracted to the output folder. Default is not to extract these tiles.")
 	parser.add_argument("--tiles", action='store_true', help='save tile images')
@@ -64,7 +68,7 @@ if __name__ == '__main__':
 
 	classes = class_parser(stain, args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
 
-	#Prediction csv from output of inference.py
+	#Assumes input of prediction csv from output of inference.py
 	if os.path.isfile(args.labels):
 		labels = pd.read_csv(args.labels, index_col='CYT ID')
 		labels.sort_index(inplace=True)
@@ -84,10 +88,10 @@ if __name__ == '__main__':
 		if args.extract:
 			slide_im = pv.Image.new_from_file(slide_file, level=0)
 			extract = args.extract
-			extract_sf = len(str(extract).strip('0')) - 1
 
 		class_masks = {}
 		class_masks[ranked_class] = np.zeros((slidl_slide.numTilesInX, slidl_slide.numTilesInY)[::-1])
+		
 		ranked_dict = {}
 
 		if args.stain == 'p53':
@@ -103,9 +107,8 @@ if __name__ == '__main__':
 				# extract target tiles
 				if args.extract:
 					if class_name == ranked_class:
-						# max_threshold = max(prob, max_threshold)
-						if round(prob, extract_sf) >= float(args.extract): #tile is considered target
-							if args.stain == 'p53':
+						if stain == 'p53':
+							if prob >= float(extract): #tile is considered target
 								if tile_address[0] < X_control and control_loc['L'] == 1:
 									continue
 								elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
@@ -118,20 +121,13 @@ if __name__ == '__main__':
 									# SAVE TARGET TILE ASAP ANNOTATION FILE
 									ranked_dict[str(prob)+'_'+str(tile_entry['x'])+'_'+str(tile_entry['y'])] = {ranked_class+'_probability': prob, 'x': tile_entry['x'], 'y': tile_entry['y'], 'width': tile_entry['width']}
 							else:
+								max_threshold = max(prob, max_threshold)
+						else:
+							if prob >= float(extract): #tile is considered target
 								# SAVE TARGET TILE ASAP ANNOTATION FILE
 								ranked_dict[str(prob)+'_'+str(tile_entry['x'])+'_'+str(tile_entry['y'])] = {ranked_class+'_probability': prob, 'x': tile_entry['x'], 'y': tile_entry['y'], 'width': tile_entry['width']}
-						else:
-							if args.stain == 'p53':
-								if tile_address[0] < X_control and control_loc['L'] == 1:
-									continue
-								elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
-									continue
-								elif Y_tiles - Y_control < tile_address[1] and (control_loc['B'] == 1 and control_loc['L'] == 0 and control_loc['R'] == 0):
-									continue
-								elif tile_address[1] < Y_control and (control_loc['T'] == 1 and control_loc['L'] == 0 and control_loc['R'] == 0):
-									continue
-								else:
-									max_threshold = max(prob, max_threshold)
+							else:
+								max_threshold = max(prob, max_threshold)
 
 				if ranked_class:
 					if (class_name == ranked_class):
@@ -139,30 +135,61 @@ if __name__ == '__main__':
 				else:
 					class_masks[class_name][tile_address[1],tile_address[0]] = prob
 	
-		# Make ASAP file
-		xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
-		xml_tail = 	"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="atypia" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
-		xml_tail = xml_tail.replace('atypia', ranked_class)
-
-		xml_annotations = ""
-
 		if ranked_dict:
 			annotation_path = os.path.join(output_path, args.description + '_' + ranked_class + '_tile_annotations')
-			if not os.path.exists(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.xml')):
-				os.makedirs(annotation_path, exist_ok=True)
-				for key, tile_info in sorted(ranked_dict.items(), reverse=True):
-					xml_annotations = (xml_annotations +
-										"\t\t<Annotation Name=\""+str(tile_info[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
-										"\t\t\t<Coordinates>\n" +
-										"\t\t\t\t<Coordinate Order=\"0\" X=\""+str(tile_info['x'])+"\" Y=\""+str(tile_info['y'])+"\" />\n" +
-										"\t\t\t\t<Coordinate Order=\"1\" X=\""+str(tile_info['x']+tile_info['width'])+"\" Y=\""+str(tile_info['y'])+"\" />\n" +
-										"\t\t\t\t<Coordinate Order=\"2\" X=\""+str(tile_info['x']+tile_info['width'])+"\" Y=\""+str(tile_info['y']+tile_info['width'])+"\" />\n" +
-										"\t\t\t\t<Coordinate Order=\"3\" X=\""+str(tile_info['x'])+"\" Y=\""+str(tile_info['y']+tile_info['width'])+"\" />\n" +
-										"\t\t\t</Coordinates>\n" +
-										"\t\t</Annotation>\n")
-				print('Creating automated annotation file for '+slide_name)
-				with open(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.xml'), "w") as annotation_file:
-					annotation_file.write(xml_header + xml_annotations + xml_tail)
+			if args.asap:
+				# Make ASAP file
+				xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
+				xml_tail = 	"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="atypia" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
+				xml_tail = xml_tail.replace('atypia', ranked_class)
+		
+				xml_annotations = ""
+				if not os.path.exists(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.xml')):
+					os.makedirs(annotation_path, exist_ok=True)
+					for key, tile_info in sorted(ranked_dict.items(), reverse=True):
+						xml_annotations = (xml_annotations +
+											"\t\t<Annotation Name=\""+str(tile_info[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
+											"\t\t\t<Coordinates>\n" +
+											"\t\t\t\t<Coordinate Order=\"0\" X=\""+str(tile_info['x'])+"\" Y=\""+str(tile_info['y'])+"\" />\n" +
+											"\t\t\t\t<Coordinate Order=\"1\" X=\""+str(tile_info['x']+tile_info['width'])+"\" Y=\""+str(tile_info['y'])+"\" />\n" +
+											"\t\t\t\t<Coordinate Order=\"2\" X=\""+str(tile_info['x']+tile_info['width'])+"\" Y=\""+str(tile_info['y']+tile_info['width'])+"\" />\n" +
+											"\t\t\t\t<Coordinate Order=\"3\" X=\""+str(tile_info['x'])+"\" Y=\""+str(tile_info['y']+tile_info['width'])+"\" />\n" +
+											"\t\t\t</Coordinates>\n" +
+											"\t\t</Annotation>\n")
+					print('Creating automated annotation file for '+slide_name)
+					with open(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.xml'), "w") as annotation_file:
+						annotation_file.write(xml_header + xml_annotations + xml_tail)
+			if args.qupath:
+				if not os.path.exists(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.geojson')):
+					os.makedirs(annotation_path, exist_ok=True)
+					json_annotations = {"type": "FeatureCollection", "features":[]}
+					for key, tile_info in sorted(ranked_dict.items(), reverse=True):
+						json_annotations['features'].append({
+							"type": "Feature",
+							"id": "PathDetectionObject",
+							"geometry": {
+							"type": "Polygon",
+							"coordinates": [
+									[
+										[tile_info['x'], tile_info['y']],
+										[tile_info['x']+tile_info['width'], tile_info['y']],
+										[tile_info['x']+tile_info['width'], tile_info['y']+tile_info['width']],
+										[tile_info['x'], tile_info['y']+tile_info['width']],		
+										[tile_info['x'], tile_info['y']]
+									]	
+								]
+							},
+							"properties": {
+								"objectType": "annotation",
+								"classification": {
+									"name": str(ranked_class),
+									"color": [255, 0, 0]
+								}
+							}
+						})
+					print('Creating automated annotation file for ' + slide_name)
+					with open(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.geojson'), "w") as annotation_file:
+						geojson.dump(json_annotations, annotation_file, indent=0)
 			else:
 				print('Automated annotation file already exists...')
 				
