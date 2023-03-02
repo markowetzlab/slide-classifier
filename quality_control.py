@@ -29,12 +29,10 @@ def parse_args():
 	parser = argparse.ArgumentParser(description='Run inference on slides.')
 
 	#dataset processing
-	parser.add_argument("--dataset", default='delta', help="Flag to switch between datasets. Currently supported: 'best'/'delta'")
-	parser.add_argument("--stain", required=True, help="he or p53")
-	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
+	parser.add_argument("--stain", required=True, help="he or tff3")
 
 	#model path and parameters
-	parser.add_argument("--network", required=True, help="which CNN architecture to use")
+	parser.add_argument("--network", default='vgg_16', help="which CNN architecture to use")
 	parser.add_argument("--model_path", required=True, help="path to stored model weights")
 
 	#slide paths and tile properties
@@ -44,17 +42,9 @@ def parse_args():
 	parser.add_argument("--overlap", default=0, help="what fraction of the tile edge neighboring tiles should overlap horizontally and vertically (default is 0)")
 	parser.add_argument("--foreground_only", action='store_true', help="Foreground with tissue only")
 	
-	#class variables
-	parser.add_argument("--dysplasia_separate", action='store_false', help="Flag whether to separate the atypia of uncertain significance and dysplasia classes")
-	parser.add_argument("--respiratory_separate", action='store_false', help="Flag whether to separate the respiratory mucosa cilia and respiratory mucosa classes")
-	parser.add_argument("--gastric_separate", action='store_false', help="Flag whether to separate the tickled up columnar and gastric cardia classes")
-	parser.add_argument("--atypia_separate", action='store_false', help="Flag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other")
-	parser.add_argument("--p53_separate", action='store_false', help="Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar")
-
 	#data processing
-	parser.add_argument("--channel_norms", default='channel_means_and_stds.pickle', help='Path to channel norms pickle file')
-	parser.add_argument("--channel_means", default=[0.7747305964175918, 0.7421753839460998, 0.7307385516144509], help="0-1 normalized color channel means for all tiles on dataset separated by commas, e.g. 0.485,0.456,0.406 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
-	parser.add_argument("--channel_stds", default=[0.2105364799974944, 0.2123423033814637, 0.20617556948731974], help="0-1 normalized color channel standard deviations for all tiles on dataset separated by commas, e.g. 0.229,0.224,0.225 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
+	parser.add_argument("--channel_means", default= [0.485, 0.456, 0.406], help="0-1 normalized color channel means for all tiles on dataset separated by commas, e.g. 0.485,0.456,0.406 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
+	parser.add_argument("--channel_stds", default= [0.229, 0.224, 0.225], help="0-1 normalized color channel standard deviations for all tiles on dataset separated by commas, e.g. 0.229,0.224,0.225 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
 	parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.")
 	parser.add_argument("--num_workers", type=int, default=8, help="Number of workers to call for DataLoader")
 	
@@ -80,20 +70,15 @@ if __name__ == '__main__':
 	output_path = args.output
 
 	if stain == 'he':
-		ranked_class = 'atypia'
-		ranked_label = 'Atypia'
-		file_name = 'H&E'
-	elif stain == 'p53':
-		ranked_class = 'aberrant_positive_columnar'
-		ranked_label = 'P53 positive'
-		file_name = 'P53'
+		classes = ['Background', 'Gastric-type columnar epithelium', 'Intestinal Metaplasia', 'Respiratory-type columnar epithelium']
+		ranked_class = 'Intestinal Metaplasia'
+		file_name = ''
+	elif stain == 'tff3':
+		classes = ['Equivocal', 'Negative', 'Positive']
+		ranked_label = 'Positive'
 	else:
-		raise AssertionError('Stain currently must be he or p53.')
+		raise AssertionError('Stain currently must be he or tff3.')
 
-	if args.target is not None:
-		ranked_class = args.target
-
-	classes = class_parser(stain, args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
 	trained_model, params = get_network(network, class_names=classes, pretrained=False)
 	try:
 		trained_model.load_state_dict(torch.load(args.model_path))
@@ -121,25 +106,17 @@ if __name__ == '__main__':
 	trained_model.to(device)
 	trained_model.eval()
 
-	prob_thresh = np.append(np.arange(0, 0.9, 0.1), np.arange(0.91, 0.99, 0.01))
-	# prob_thresh = np.append(prob_thresh, np.arange(0.99, 0.998, 0.0001))
-	prob_thresh = np.append(prob_thresh, np.arange(0.999, 0.9999, 0.000001))
-	prob_thresh = np.round(prob_thresh, 7)
-
 	if not os.path.exists(output_path):
 		os.makedirs(output_path, exist_ok=True)
 	print("Outputting inference to: ", output_path)
 
 	csv_path = os.path.join(output_path, network + '-' + stain + '-prediction-data.csv')
 
-	if args.channel_means and args.channel_stds:
-		channel_means = args.channel_means.split(',')
-		channel_stds = args.channel_stds.split(',')
-	else:
-		channel_norm = args.model_path.replace(args.model_path.split('/')[-1], args.channel_norms)
-		channel_means, channel_stds = channel_averages(channel_norm)
+	channel_means = args.channel_means.split(',')
+	channel_stds = args.channel_stds.split(',')
 	if not args.silent:
 		print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
+
 	data_transforms = image_transforms(channel_means, channel_stds, patch_size)['val']
 
 	if os.path.isfile(args.labels):

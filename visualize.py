@@ -34,7 +34,8 @@ def parse_args():
 	parser.add_argument("--asap", action='store_true', help='Output annotation file in ASAP .xml format')
 	parser.add_argument("--qupath", action='store_true', help='Output annotation file in QuPath .geojson format')
 
-	parser.add_argument("--extract", default=None, help="A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53) are extracted to the output folder. Default is not to extract these tiles.")
+	parser.add_argument("--triage_threshold", default=0.99, help="A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53) are triage_thresholded to the output folder. Default is not to extract these tiles.")
+	parser.add_argument("--automated_threshold", default=0.999, help="Threshold to mark for the annotation file.")
 	parser.add_argument("--tiles", action='store_true', help='save tile images')
 	parser.add_argument("--vis", action='store_true', help='save heatmaps')
 
@@ -53,6 +54,7 @@ if __name__ == '__main__':
 
 	if target is not None:
 		ranked_class = target
+		ranked_label = target
 	elif stain == 'he':
 		ranked_class = 'atypia'
 		ranked_label = 'Atypia'
@@ -85,9 +87,10 @@ if __name__ == '__main__':
 		slidl_slide = Slide(case_inference, newSlideFilePath=slide_file)
 		thumbnail = slidl_slide.thumbnail(level=4)
 
-		if args.extract:
+		if args.triage_threshold:
 			slide_im = pv.Image.new_from_file(slide_file, level=0)
-			extract = args.extract
+			triage_threshold = args.triage_threshold
+			automated_threshold = args.automated_threshold
 
 		class_masks = {}
 		class_masks[ranked_class] = np.zeros((slidl_slide.numTilesInX, slidl_slide.numTilesInY)[::-1])
@@ -104,11 +107,11 @@ if __name__ == '__main__':
 		max_threshold = 0
 		for tile_address, tile_entry in slidl_slide.tileDictionary.items():
 			for class_name, prob in tile_entry['classifierInferencePrediction'].items():
-				# extract target tiles
-				if args.extract:
+				# triage_threshold target tiles
+				if args.triage_threshold:
 					if class_name == ranked_class:
 						if stain == 'p53':
-							if prob >= float(extract): #tile is considered target
+							if prob >= float(triage_threshold): #tile is considered target
 								if tile_address[0] < X_control and control_loc['L'] == 1:
 									continue
 								elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
@@ -123,7 +126,7 @@ if __name__ == '__main__':
 							else:
 								max_threshold = max(prob, max_threshold)
 						else:
-							if prob >= float(extract): #tile is considered target
+							if prob >= float(triage_threshold): #tile is considered target
 								# SAVE TARGET TILE ASAP ANNOTATION FILE
 								ranked_dict[str(prob)+'_'+str(tile_entry['x'])+'_'+str(tile_entry['y'])] = {ranked_class+'_probability': prob, 'x': tile_entry['x'], 'y': tile_entry['y'], 'width': tile_entry['width']}
 							else:
@@ -164,6 +167,13 @@ if __name__ == '__main__':
 					os.makedirs(annotation_path, exist_ok=True)
 					json_annotations = {"type": "FeatureCollection", "features":[]}
 					for key, tile_info in sorted(ranked_dict.items(), reverse=True):
+						if tile_info[ranked_class+'_probability'] > automated_threshold:
+							color = [255, 0 , 0]
+							status = str(ranked_class) + '_priority'
+						else:
+							color = [0, 255, 0]
+							status = str(ranked_class) + '_triage'
+						
 						json_annotations['features'].append({
 							"type": "Feature",
 							"id": "PathDetectionObject",
@@ -182,8 +192,8 @@ if __name__ == '__main__':
 							"properties": {
 								"objectType": "annotation",
 								"classification": {
-									"name": str(ranked_class),
-									"color": [255, 0, 0]
+									"name": status,
+									"color": color
 								}
 							}
 						})
@@ -218,8 +228,8 @@ if __name__ == '__main__':
 			if not os.path.exists(im_path):
 				os.makedirs(im_path)
 			slide_im.plot_thumbnail(case_id=index, target=ranked_class)
-			slide_im.draw_class(target = ranked_class, threshold=args.extract)
+			slide_im.draw_class(target = ranked_class, threshold=args.triage_threshold)
 			slide_im.plot_class(target = ranked_class)
-			slide_im.save(im_path, slide_file.replace(args.format, "_" + ranked_class + args.extract))
+			slide_im.save(im_path, slide_file.replace(args.format, "_" + ranked_class + args.triage_threshold))
 			plt.show()
 			plt.close('all')
