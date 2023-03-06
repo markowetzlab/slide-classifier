@@ -121,8 +121,7 @@ if __name__ == '__main__':
 	trained_model.to(device)
 	trained_model.eval()
 
-	prob_thresh = np.append(np.arange(0, 0.9, 0.1), np.arange(0.91, 0.99, 0.01))
-	# prob_thresh = np.append(prob_thresh, np.arange(0.99, 0.998, 0.0001))
+	prob_thresh = np.append(np.arange(0, 0.9, 0.), np.arange(0.91, 0.99, 0.01))
 	prob_thresh = np.append(prob_thresh, np.arange(0.999, 0.9999, 0.000001))
 	prob_thresh = np.round(prob_thresh, 7)
 
