@@ -12,15 +12,13 @@ import torch
 import torch.nn as nn
 from slidl.slide import Slide
 
-from dataset_processing import class_parser
-from dataset_processing.image import channel_averages, image_transforms
+from dataset_processing.image import image_transforms
 from models import get_network
 from utils.visualisation.display_slide import slide_image
-from utils.metrics.threshold import precision_recall_plots, auc_thresh_plot, roc_thresh_plot, auprc_curve_plot, auprc_thresh_plot
 from slidl.utils.torch.WholeSlideImageDataset import WholeSlideImageDataset
 
-from sklearn.metrics import (average_precision_score, f1_score, precision_recall_curve, precision_score,
-							 recall_score, roc_auc_score, roc_curve)
+from sklearn.metrics import (average_precision_score, precision_recall_curve, roc_auc_score, roc_curve, classification_report,
+			     confusion_matrix)
 
 import warnings
 warnings.filterwarnings('always')
@@ -30,6 +28,7 @@ def parse_args():
 
 	#dataset processing
 	parser.add_argument("--stain", required=True, help="he or tff3")
+	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
 
 	#model path and parameters
 	parser.add_argument("--network", default='vgg_16', help="which CNN architecture to use")
@@ -48,6 +47,10 @@ def parse_args():
 	parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.")
 	parser.add_argument("--num_workers", type=int, default=8, help="Number of workers to call for DataLoader")
 	
+	parser.add_argument("--qc_threshold", default=0.99, help="A threshold for detecting gastric cardia in H&E")
+	parser.add_argument("--tff3_threshold", default= 0.93, help="A threshold for Goblet cell detection in tff3")
+	parser.add_argument("--tile_cutoff", default=6, help='number of tiles to be considered positive')
+
 	#outputs
 	parser.add_argument("--output", required=True, help="path to folder where inference maps will be stored")
 	parser.add_argument("--csv", action='store_true', help="Generate csv output file")
@@ -70,18 +73,27 @@ if __name__ == '__main__':
 	output_path = args.output
 
 	if stain == 'he':
+		file_name = 'H&E'
+		gt_label = 'QC Report'
 		classes = ['Background', 'Gastric-type columnar epithelium', 'Intestinal Metaplasia', 'Respiratory-type columnar epithelium']
-		ranked_class = 'Intestinal Metaplasia'
-		file_name = ''
+		ranked_class = 'Gastric-type columnar epithelium'
+		secondary_class = 'Intestinal Metaplasia'
+		thresh = args.qc_threshold
+		mapping = {'Adequate for pathological review': 1, 'Scant columnar cells': 0, 'Squamous cells only': 0, 'Insufficient cellular material': 0}
 	elif stain == 'tff3':
+		file_name = 'TFF3'
+		gt_label = 'TFF3 positive'
 		classes = ['Equivocal', 'Negative', 'Positive']
-		ranked_label = 'Positive'
+		ranked_class = 'Positive'
+		secondary_class = 'Equivocal'
+		thresh = args.tff3_threshold
+		mapping = {'Y': 1, 'N': 0}
 	else:
-		raise AssertionError('Stain currently must be he or tff3.')
+		raise AssertionError('Stain must be he or tff3.')
 
 	trained_model, params = get_network(network, class_names=classes, pretrained=False)
 	try:
-		trained_model.load_state_dict(torch.load(args.model_path))
+		trained_model.load_state_dict(torch.load(args.model_path).module.state_dict())
 	except: 
 		trained_model = torch.load(args.model_path)
 	
@@ -99,9 +111,7 @@ if __name__ == '__main__':
 	else:
 		device = torch.device("cpu")
 
-	if torch.cuda.device_count() > 1:
-		print("Let's use", torch.cuda.device_count(), "GPUs!")
-		trained_model = nn.DataParallel(trained_model)
+	torch.nn.Module.dump_patches = True
 
 	trained_model.to(device)
 	trained_model.eval()
@@ -112,8 +122,8 @@ if __name__ == '__main__':
 
 	csv_path = os.path.join(output_path, network + '-' + stain + '-prediction-data.csv')
 
-	channel_means = args.channel_means.split(',')
-	channel_stds = args.channel_stds.split(',')
+	channel_means = args.channel_means
+	channel_stds = args.channel_stds
 	if not args.silent:
 		print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
 
@@ -121,10 +131,9 @@ if __name__ == '__main__':
 
 	if os.path.isfile(args.labels):
 		labels = pd.read_csv(args.labels, index_col=0)
-		labels[ranked_label] = labels[ranked_label].fillna('N')
+		labels[gt_label] = labels[gt_label].fillna('N')
 		labels.sort_index(inplace=True)
-		if not args.dataset == 'best':
-			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0))
+		labels[gt_label] = labels[gt_label].map(mapping)
 	else:
 		raise AssertionError('Not a valid path for ground truth labels.')
 
@@ -146,10 +155,10 @@ if __name__ == '__main__':
 		if not args.silent:
 			print(f'Processing case {case_number}/{len(labels)}: ', end='')
 
-		inference_output = os.path.join(output_path, 'inference')
+		inference_output = os.path.join(output_path, 'triage')
 		if not os.path.exists(inference_output):
 			os.makedirs(inference_output)
-		slide_output = os.path.join(inference_output, case_file.replace(args.format, '_inference'))
+		slide_output = os.path.join(inference_output, case_file.replace(args.format, '_triage'))
 
 		if os.path.isfile(slide_output + '.pml'):
 			if not args.silent:
@@ -179,33 +188,23 @@ if __name__ == '__main__':
 						tileAddress = (inputs['tileAddress'][0][index].item(), inputs['tileAddress'][1][index].item())
 						preds = batch_prediction[index, ...].tolist()
 						if len(preds) != len(classes):
-							raise ValueError('Model has '+str(len(preds))+' classes but only '+str(len(classes))+' class names were provided in the classes argument')
+							raise ValueError('Model has '+str(len(preds))+' classes but '+str(len(classes))+' class names were provided in the classes argument')
 						prediction = {}
 						for i, pred in enumerate(preds):
 							prediction[classes[i]] = pred
 						slidl_slide.appendTag(tileAddress, 'classifierInferencePrediction', prediction)
 						tile_predictions.append(tileAddress)			
-				
+			
 			slidl_slide.save(fileName = slide_output)
 			time_elapsed = time.time() - since
 			if not args.silent:
 				print('Inference complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
 
-		target_accuracy = []
-		for threshold in prob_thresh:
-			tiles = 0
-			for tile_address, tile_entry in slidl_slide.tileDictionary.items():
-				if ranked_class not in tile_entry['classifierInferencePrediction']:
-					raise ValueError(ranked_class +' not in classifierInferencePrediction at tile '+str(tile_address))
-				if tile_entry['classifierInferencePrediction'][ranked_class] >= threshold:
-					tiles += 1
-			target_accuracy.append(tiles)
+		data = {'CYT ID': index, 'Case Path': case_file, 'Ground Truth Label': row[gt_label]}
 
-		data = {'CYT ID': index, 'Case Path': case_file, 'Ground Truth Label': row[ranked_label]}
-
-		tile_cols = [ranked_class + ' > ' + str(prob) for prob in prob_thresh]
-		tile_data = dict(zip(tile_cols, [int(i) for i in target_accuracy]))
-		data.update(tile_data)
+		for class_name in classes:
+			class_tiles = slidl_slide.numTilesAboveClassPredictionThreshold(classToThreshold=class_name, probabilityThresholds=thresh)
+			data.update({class_name+' Tiles': class_tiles})
 		data_list.append(data)
 
 		if args.vis:
@@ -227,91 +226,17 @@ if __name__ == '__main__':
 		df.to_csv(csv_path, index_label='CYT ID')
 
 	if args.stats:
-		cutoff_prob = []
-		auprc_cutoff_prob = []
-	
-		cutoffs = {}
-		auc_probs = {}
-		auc_plotting = {}
-		auc_data = []
-		
-		auprc_cutoffs = {}
-		auprc_probs = {}
-		auprc_plotting = {} 
-		auprc_data = []
-		
-		fpr_data = []
-		tpr_data = []
-		
-		precision_data = []
-		recall_data = []
-	
-		binary_precision = []
-		binary_recall = []
-		binary_f1 = []
-
-		gt_col = df['Ground Truth Label']
+		gt_col = df[gt_label]
 		gt = gt_col.tolist()
 
-		for thresh in tile_cols:
-			pred_col = df[thresh]
+		pred_col = df[ranked_class+ ' Tiles']
+		pred = (pred_col > args.tile_cutoff).astype(int).tolist()
 
-			auc_data.append(roc_auc_score(gt_col, pred_col))
-			auprc_data.append(average_precision_score(gt_col, pred_col))
-			
-			fpr, tpr, threshs = roc_curve(gt_col, pred_col)
-			precision, recall, thresholds = precision_recall_curve(gt_col, pred_col)
-	
-			fpr_data.append(fpr)
-			tpr_data.append(tpr)
-			precision_data.append(precision)
-			recall_data.append(recall)
-	
-			pred = (pred_col > 0).astype(int).tolist()
-	
-			binary_precision.append(precision_score(gt, pred))
-			binary_recall.append(recall_score(gt, pred))
-			binary_f1.append(f1_score(gt, pred))
-
-		thresh_prec_rec_df = pd.DataFrame(list(zip([str(p) for p in prob_thresh], binary_precision, binary_recall, binary_f1)), columns=['Thresh', 'Precision', 'Recall', 'F1'])
-		if args.csv:
-			thresh_prec_rec_df.to_csv(csv_path.replace('prediction-data', 'results'))
-
-		max_auc = max(auc_data)
-		max_auc_idx = auc_data.index(max_auc)
-		print('Upper Threshold: ' + str(prob_thresh[max_auc_idx]), 'AUC: ' + str(auc_data[max_auc_idx]))
-	
-		cutoff_prob.append(round(prob_thresh[max_auc_idx], 6))
-		cutoffs['tile_thresh'] = round(prob_thresh[max_auc_idx], 7)
-		auc_probs['prob'] = auc_data
-	
-		auc_plotting['fpr'] = fpr_data[max_auc_idx]
-		auc_plotting['tpr'] = tpr_data[max_auc_idx]
+		auc_data = roc_auc_score(gt, pred)
+		auprc_data = average_precision_score(gt, pred)
 		
-		max_auprc = max(auprc_data)
-		max_auprc_idx = auprc_data.index(max_auprc)
-		print('Lower Threshold: ' + str(prob_thresh[max_auprc_idx]), 'AUPRC: ' + str(auprc_data[max_auprc_idx]))
-		
-		auprc_cutoff_prob.append(round(prob_thresh[max_auprc_idx], 6))
-		auprc_cutoffs['tile_thresh'] = prob_thresh[max_auprc_idx]
-		auprc_probs['prob'] = auprc_data
-		auprc_plotting['precision'] = precision_data[max_auprc_idx]
-		auprc_plotting['recall'] = recall_data[max_auprc_idx]
+		fpr, tpr, threshs = roc_curve(gt, pred)
+		precision, recall, thresholds = precision_recall_curve(gt_col, pred_col)
 
-		pr_fig = precision_recall_plots(thresh_prec_rec_df, 0.999, 1)
-		pr_fig.savefig(os.path.join(output_path, 'pr_curve_' + stain.upper() + '.png'))
-
-		auc_fig = auc_thresh_plot(auc_probs, prob_thresh, stain, x_min=0.9)
-		auc_fig.savefig(os.path.join(output_path, 'auc_prob_threshold_' + stain.upper() + '.png'))
-
-		roc_fig = roc_thresh_plot(cutoffs, auc_probs, auc_plotting, stain)
-		roc_fig.savefig(os.path.join(output_path, 'roc_curve_' + stain.upper() + '.png'))
-
-		auprc_curve_fig = auprc_curve_plot(auprc_cutoffs, auprc_probs, auprc_plotting, stain)
-		auprc_curve_fig.savefig(os.path.join(output_path, 'auprc_curve_' + stain.upper() + '.png'))
-
-		auprc_thresh_fig = auprc_thresh_plot(auprc_probs, prob_thresh, stain)
-		auprc_thresh_fig.savefig(os.path.join(output_path, 'auprc_prob_threshold_' + stain.upper() + '.png'))
-
-	if args.vis:
-		plt.show()
+		print(confusion_matrix(gt, pred))
+		print(classification_report(gt, pred))

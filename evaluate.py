@@ -1,10 +1,10 @@
 import argparse
 import os
 
-from tqdm import tqdm
+import numpy as np
 import pandas as pd
 from sklearn.metrics import (roc_auc_score, precision_score, recall_score, f1_score,
-				classification_report, confusion_matrix)
+				classification_report, confusion_matrix, ConfusionMatrixDisplay)
 from slidl.slide import Slide
 
 from dataset_processing import class_parser
@@ -247,6 +247,7 @@ if __name__ == '__main__':
 		print('Specificity: ', tn/(tn+fp))
 		print('Precision: ', precision)
 		print('F1: ', f1, '\n')
+
 		print(confusion_matrix(gt, results))
 
 		print(classification_report(gt, results))
@@ -271,19 +272,27 @@ if __name__ == '__main__':
 		print('Specificity: ', tn/(tn+fp))
 		print('Precision: ', precision)
 		print('F1: ', f1, '\n')
+
 		print(confusion_matrix(gt, results))
-		
+
 		print(classification_report(gt, results))
 
 	if he_inference_root is not None and p53_inference_root is not None:
-		df.loc[df['Atypia Results'] >= 1 or df['P53 Results'] >= 1, 'Results'] =  1
-		df.loc[df['Atypia Results'] == 0 and df['P53 Results'] == 0, 'Results'] = 0
+		df['AI Triage'] = np.where((df['Atypia Results'] == 1) & (df['P53 Results'] == 1), 1, 0)
+		df['Pathologist Triage'] = np.where((df['Atypia GT'] == 1) & (df['P53 GT'] == 1), 1, 0)
+		
+		path_atypia_p53 = dict(df['Pathologist Triage'].value_counts())
+		ai_atypia_p53 = dict(df['AI Triage'].value_counts())
 
 		print('Atypia-P53 model vs. pre-AI pathologist ground truth')
-		print(classification_report(df['Pathologist GT'].astype(int).tolist(), df['Results'].astype(int).tolist()))
-		print(confusion_matrix(df['Pathologist GT'].astype(int).tolist(), df['Results'].astype(int).tolist()))
+		# print(classification_report(df['Pathologist Triage'].astype(int).tolist(), df['AI Triage'].astype(int).tolist()))
+		# print(confusion_matrix(df['Pathologist Triage'].astype(int).tolist(), df['AI Triage'].astype(int).tolist()))
+
+		print(f'Pathologist reported patients where Atypia and P53 Positive: {path_atypia_p53[1]}/{len(df["Pathologist Triage"])}')
+		print(f'AI reported patients where Atypia and P53 Positive: {ai_atypia_p53[1]}/{len(df["AI Triage"])}')
+		print(classification_report(df['Pathologist Triage'].astype(int).tolist(), df['AI Triage'].astype(int).tolist()))
+		print(confusion_matrix(df['Pathologist Triage'].astype(int).tolist(), df['AI Triage'].astype(int).tolist()))
 
 	if args.csv:
 		# Emit CSVs of these datasets
 		df.to_csv(os.path.join(output_path, args.description + '_results.csv'), index=False)
-

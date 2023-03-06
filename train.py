@@ -86,9 +86,9 @@ def train_model(model, params, device, criterion, optimizer, scheduler, dataload
 		# Each epoch has a training and validation phase
 		for phase in ['train', 'val']:
 			if phase == 'train':
-				model.train()  # Set model to training mode
+				model.train() # Set model to training mode
 			else:
-				model.eval()   # Set model to evaluate mode
+				model.eval() # Set model to evaluate mode
 
 			epoch_ground_truth = []
 			epoch_predictions = []

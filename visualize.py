@@ -145,7 +145,7 @@ if __name__ == '__main__':
 				xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
 				xml_tail = 	"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="atypia" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
 				xml_tail = xml_tail.replace('atypia', ranked_class)
-		
+
 				xml_annotations = ""
 				if not os.path.exists(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.xml')):
 					os.makedirs(annotation_path, exist_ok=True)
