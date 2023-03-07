@@ -31,8 +31,8 @@ def parse_args():
 	parser.add_argument("--atypia_separate", action='store_false', help="Flag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other")
 	parser.add_argument("--p53_separate", action='store_false', help="Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar")
 
-	parser.add_argument("--asap", action='store_true', help='Output annotation file in ASAP .xml format')
-	parser.add_argument("--qupath", action='store_true', help='Output annotation file in QuPath .geojson format')
+	parser.add_argument("--xml", action='store_true', help='Output annotation file in ASAP .xml format')
+	parser.add_argument("--json", action='store_true', help='Output annotation file in QuPath .geojson format')
 
 	parser.add_argument("--triage_threshold", default=0.99, help="A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53) are triage_thresholded to the output folder. Default is not to extract these tiles.")
 	parser.add_argument("--automated_threshold", default=0.999, help="Threshold to mark for the annotation file.")
@@ -140,15 +140,16 @@ if __name__ == '__main__':
 	
 		if ranked_dict:
 			annotation_path = os.path.join(output_path, args.description + '_' + ranked_class + '_tile_annotations')
-			if args.asap:
+			os.makedirs(annotation_path, exist_ok=True)
+			if args.xml:
 				# Make ASAP file
-				xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
-				xml_tail = 	"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="atypia" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
-				xml_tail = xml_tail.replace('atypia', ranked_class)
+				if not os.path.exists(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.xml')):					
+					xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
+					xml_tail = 	"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="atypia" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
+					xml_tail = xml_tail.replace('atypia', ranked_class)
+	
+					xml_annotations = ""
 
-				xml_annotations = ""
-				if not os.path.exists(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.xml')):
-					os.makedirs(annotation_path, exist_ok=True)
 					for key, tile_info in sorted(ranked_dict.items(), reverse=True):
 						xml_annotations = (xml_annotations +
 											"\t\t<Annotation Name=\""+str(tile_info[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
@@ -162,9 +163,11 @@ if __name__ == '__main__':
 					print('Creating automated annotation file for '+slide_name)
 					with open(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.xml'), "w") as annotation_file:
 						annotation_file.write(xml_header + xml_annotations + xml_tail)
-			if args.qupath:
+				else:
+					print('Automated xml annotation file already exists...')
+				
+			if args.json:
 				if not os.path.exists(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.geojson')):
-					os.makedirs(annotation_path, exist_ok=True)
 					json_annotations = {"type": "FeatureCollection", "features":[]}
 					for key, tile_info in sorted(ranked_dict.items(), reverse=True):
 						if tile_info[ranked_class+'_probability'] > automated_threshold:
@@ -201,7 +204,7 @@ if __name__ == '__main__':
 					with open(os.path.join(annotation_path, slide_name+'_inference_'+ranked_class+'.geojson'), "w") as annotation_file:
 						geojson.dump(json_annotations, annotation_file, indent=0)
 			else:
-				print('Automated annotation file already exists...')
+				print('Automated geojson annotation file already exists...')
 				
 			if args.tiles:
 				# SAVE TARGET TILES

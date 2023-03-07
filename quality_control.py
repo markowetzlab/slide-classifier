@@ -3,13 +3,13 @@
 import argparse
 import os
 import time
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import geojson
+
 from tqdm import tqdm
 
 import torch
-import torch.nn as nn
 from slidl.slide import Slide
 
 from dataset_processing.image import image_transforms
@@ -25,6 +25,8 @@ warnings.filterwarnings('always')
 
 def parse_args():
 	parser = argparse.ArgumentParser(description='Run inference on slides.')
+
+	parser.add_argument("--description", default='triage', help="string to save results to.")
 
 	#dataset processing
 	parser.add_argument("--stain", required=True, help="he or tff3")
@@ -54,9 +56,11 @@ def parse_args():
 	#outputs
 	parser.add_argument("--output", required=True, help="path to folder where inference maps will be stored")
 	parser.add_argument("--csv", action='store_true', help="Generate csv output file")
-	parser.add_argument("--vis", action='store_true', help="Display WSI after each slide")
-	parser.add_argument("--thumbnail", action='store_true', help="Save thumbnail of WSI for analysis (vis must also be true)")
 	parser.add_argument('--stats', action='store_true', help='produce precision-recall plot')
+	parser.add_argument('--xml', action='store_true', help='produce annotation files for ASAP in .xml format')
+	parser.add_argument('--json', action='store_true', help='produce annotation files for QuPath in .geoJSON format')
+	parser.add_argument("--vis", action='store_true', help="Display WSI with heatmap after each slide")
+	parser.add_argument("--thumbnail", action='store_true', help="Save thumbnail of WSI for analysis (vis must also be true)")
 
 	parser.add_argument('--silent', action='store_true', help='Flag which silences terminal outputs')
 
@@ -142,6 +146,7 @@ if __name__ == '__main__':
 	case_number = 0
 	for index, row in labels.iterrows():
 		case_file = row[file_name]
+		slide_name = case_file.replace(args.format, "")
 		case_number += 1
 		try:
 			case_path = os.path.join(slide_path, case_file)
@@ -158,7 +163,7 @@ if __name__ == '__main__':
 		inference_output = os.path.join(output_path, 'triage')
 		if not os.path.exists(inference_output):
 			os.makedirs(inference_output)
-		slide_output = os.path.join(inference_output, case_file.replace(args.format, '_triage'))
+		slide_output = os.path.join(inference_output, slide_name+'_triage')
 
 		if os.path.isfile(slide_output + '.pml'):
 			if not args.silent:
@@ -207,6 +212,85 @@ if __name__ == '__main__':
 			data.update({class_name+' Tiles': class_tiles})
 		data_list.append(data)
 
+		if args.xml or args.json:
+			ranked_dict = {}
+			annotation_path = os.path.join(output_path, args.description + '_qc_tile_annotations')
+			os.makedirs(annotation_path, exist_ok=True)
+
+			for tile_address, tile_entry in slidl_slide.tileDictionary.items():
+				for class_name, prob in tile_entry['classifierInferencePrediction'].items():
+					if class_name == ranked_class or class_name == secondary_class:
+						if prob >= float(thresh):
+							ranked_dict[str(class_name)+'_'+str(tile_entry['x'])+'_'+str(tile_entry['y'])] = {class_name+'_probability': prob, 'x': tile_entry['x'], 'y': tile_entry['y'], 'width': tile_entry['width']}
+
+			if args.xml:
+				xml_path = os.path.join(annotation_path, slide_name+'_inference_'+stain+'_qc.xml')
+				if not os.path.exists(xml_path):
+					# Make ASAP file
+					xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
+					xml_tail = 	f"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="{ranked_class}" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
+
+					xml_annotations = ""
+					for key, tile_info in sorted(ranked_dict.items(), reverse=True):
+						xml_annotations = (xml_annotations +
+											"\t\t<Annotation Name=\""+str(tile_info[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
+											"\t\t\t<Coordinates>\n" +
+											"\t\t\t\t<Coordinate Order=\"0\" X=\""+str(tile_info['x'])+"\" Y=\""+str(tile_info['y'])+"\" />\n" +
+											"\t\t\t\t<Coordinate Order=\"1\" X=\""+str(tile_info['x']+tile_info['width'])+"\" Y=\""+str(tile_info['y'])+"\" />\n" +
+											"\t\t\t\t<Coordinate Order=\"2\" X=\""+str(tile_info['x']+tile_info['width'])+"\" Y=\""+str(tile_info['y']+tile_info['width'])+"\" />\n" +
+											"\t\t\t\t<Coordinate Order=\"3\" X=\""+str(tile_info['x'])+"\" Y=\""+str(tile_info['y']+tile_info['width'])+"\" />\n" +
+											"\t\t\t</Coordinates>\n" +
+											"\t\t</Annotation>\n")
+					print('Creating automated annotation file for '+slide_name)
+					with open(xml_path, "w") as annotation_file:
+						annotation_file.write(xml_header + xml_annotations + xml_tail)
+				else:
+					print('Automated xml annotation file already exists...')
+
+			if args.json:
+				json_path = os.path.join(annotation_path, slide_name+'_inference_'+stain+'_qc.geojson')
+				if not os.path.exists(json_path):
+					json_annotations = {"type": "FeatureCollection", "features":[]}
+					for key, tile_info in sorted(ranked_dict.items(), reverse=True):
+						if ranked_class in key:
+							color = [0, 0, 255]
+							status = str(ranked_class)
+						elif secondary_class in key:
+							color = [255, 0, 255]
+							status = str(secondary_class)
+						else:
+							color = [0, 0, 0]
+							status = tile_info
+						
+						json_annotations['features'].append({
+							"type": "Feature",
+							"id": "PathDetectionObject",
+							"geometry": {
+							"type": "Polygon",
+							"coordinates": [
+									[
+										[tile_info['x'], tile_info['y']],
+										[tile_info['x']+tile_info['width'], tile_info['y']],
+										[tile_info['x']+tile_info['width'], tile_info['y']+tile_info['width']],
+										[tile_info['x'], tile_info['y']+tile_info['width']],		
+										[tile_info['x'], tile_info['y']]
+									]	
+								]
+							},
+							"properties": {
+								"objectType": "annotation",
+								"classification": {
+									"name": status,
+									"color": color
+								}
+							}
+						})
+					print('Creating automated annotation file for ' + slide_name)
+					with open(json_path, "w") as annotation_file:
+						geojson.dump(json_annotations, annotation_file, indent=0)
+				else:
+					print('Automated geojson annotation file already exists...')
+
 		if args.vis:
 			slide_im = slide_image(slidl_slide, stain, classes)
 			im_path = os.path.join(args.output, 'images')
@@ -214,11 +298,11 @@ if __name__ == '__main__':
 				os.makedirs(im_path)
 			slide_im.plot_thumbnail(case_id=index, target=ranked_class)
 			if args.thumbnail:
-				slide_im.save(im_path, case_file.replace(args.format, "_thumbnail"))
+				slide_im.save(im_path, slide_name+"_thumbnail")
 			slide_im.draw_class(target = ranked_class)
 			slide_im.plot_class(target = ranked_class)
-			slide_im.save(im_path, case_file.replace(args.format, "_" + ranked_class))
-			# plt.show()
+			slide_im.save(im_path, slide_name+"_"+ ranked_class)
+			plt.show()
 			plt.close('all')
 
 	df = pd.DataFrame.from_dict(data_list)
@@ -226,7 +310,7 @@ if __name__ == '__main__':
 		df.to_csv(csv_path, index_label='CYT ID')
 
 	if args.stats:
-		gt_col = df[gt_label]
+		gt_col = df['Ground Truth Label']
 		gt = gt_col.tolist()
 
 		pred_col = df[ranked_class+ ' Tiles']
