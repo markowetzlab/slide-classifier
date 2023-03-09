@@ -1,7 +1,7 @@
 # Marcel Gehrung
 
 import pickle
-from typing import Any, Callable, Dict, List, Optional, Tuple,
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 import torch.utils.data

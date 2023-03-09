@@ -5,7 +5,6 @@ pandas
 scikit-learn
 pyvips
 shapely
-torch
+pytorch
 torchvision
-slidl
-geojson
+geojson 

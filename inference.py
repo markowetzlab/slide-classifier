@@ -90,9 +90,6 @@ if __name__ == '__main__':
 	else:
 		raise AssertionError('Stain currently must be he or p53.')
 
-	if args.target is not None:
-		ranked_class = args.target
-
 	classes = class_parser(stain, args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
 	trained_model, params = get_network(network, class_names=classes, pretrained=False)
 	try:
@@ -121,8 +118,8 @@ if __name__ == '__main__':
 	trained_model.to(device)
 	trained_model.eval()
 
-	prob_thresh = np.append(np.arange(0, 0.9, 0.), np.arange(0.91, 0.99, 0.01))
-	prob_thresh = np.append(prob_thresh, np.arange(0.999, 0.9999, 0.000001))
+	prob_thresh = np.append(np.arange(0, 0.9, 0.1), np.arange(0.91, 0.99, 0.01))
+	prob_thresh = np.append(prob_thresh, np.arange(0.999, 0.9999, 0.0001))
 	prob_thresh = np.round(prob_thresh, 7)
 
 	if not os.path.exists(output_path):
@@ -132,8 +129,8 @@ if __name__ == '__main__':
 	csv_path = os.path.join(output_path, network + '-' + stain + '-prediction-data.csv')
 
 	if args.channel_means and args.channel_stds:
-		channel_means = args.channel_means.split(',')
-		channel_stds = args.channel_stds.split(',')
+		channel_means = args.channel_means
+		channel_stds = args.channel_stds
 	else:
 		channel_norm = args.model_path.replace(args.model_path.split('/')[-1], args.channel_norms)
 		channel_means, channel_stds = channel_averages(channel_norm)

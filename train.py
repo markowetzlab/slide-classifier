@@ -59,7 +59,7 @@ def parse_args():
 	parser.add_argument("--colourjitter", type=float, default=0.0, help="how much to jitter (brightness, contrast, saturation, hue), should be 0-1")
 	parser.add_argument("--useimbalanceddatasetsampler", action="store_true", help="whether to use ImbalancedDatasetSampler")
 
-	#outputs	
+	#outputs
 	parser.add_argument("--output", type=str, default='results', help="output folder")
 
 	parser.add_argument('--silent', action='store_true', help='Flag which silences tqdm on servers')
