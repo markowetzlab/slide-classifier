@@ -50,21 +50,44 @@ pip install slidl
 
 This file interprets the suitability of a given cytosponge slide from a patient. This code takes in a H&E or TFF3 slide and outputs a count for the number of target tiles and secondary tiles as well as an optional annotation file for viewing.
 
+By default, this file uses the VGG-16 network, which is trained separately to perform quality control analysis on H&E slides (i.e. Gastric-columnar Epithelium and Intestinal Metaplasia detection), or Goblet cell detection from TFF3 slides, with thresholds determined from the paper.
+
 Arguments:
 ```
 --description, takes a String to save the location of results to, defaults to triage
 
---stain, "he" or "tff3" - Flag to specify the type of data being used
---labels, CSV file containing pathologist ground truth
-
---network, defaults to VGG 16, specify architecture to use: see models for available
---model_path, path to stored model weights
-
+Slide properties:
+--stain, choices are "he" or "tff3" - Flag to specify the type of data being used
 --slide_path, Path to Slide(s) location/root folder
 --format, WSI Extension name, default is .ndpi
 --tile_size, Size of tile to generate for model input, default is 400 pixels
 --overlap, Fraction of tile edge to extract with overlapping neighboring tiles
 --foreground_only, Flag to detect foreground of slide and only perform analysis on tissue
+--labels, CSV file containing pathologist ground truth
+
+Model and path to model weights
+--network, defaults to VGG 16, specify architecture to use: see models for available
+--model_path, path to stored model weights, must specify
+
+Data prepocessing:
+--channel_means, Channel Means as a list to normalise around, default is the imagenet channel averages i.e. [0.485, 0.456, 0.406]
+--channel_stds, Channel standard deviation to normalise around, default is the imagenet channel std i.e. [0.229, 0.224, 0.225]
+--batch_size, Batch size to infer on, defaults to architecture determined batch size
+--num_workers, Number of CPU workers
+
+Thresholds:
+--qc_threshold, Threshold of model output to consider as positive for target classes, default is 0.99 as determined by the paper
+--tff3_threshold, Threshold of model output to consider as positive for target classes, default is 0.93 as determined by the paper
+--tile_cutoff, Threhsold number of tiles to consider as positive, default is 6 as determined in the paper
+
+Specify script outputs:
+--output, Path to save outputs to
+--csv, Flag to save data as CSV file including tile counts
+--stats, Flag to produce Precision-Recall plot
+--xml, Flag to produce model outputs as annotation files in .xml (ASAP) format
+--json, Flag to produce model outputs as annotation files in .geojson (QuPath) format
+--vis, Flag to dsiplay the output of the model as a heatmap of areas to analyse
+--thumbnail, Flag to save the vis thumbnail, vis must also be active
 ```
 
 If you use this code please cite the original paper using the citation below:
@@ -83,19 +106,55 @@ If you use this code please cite the original paper using the citation below:
 </details>
 
 ***
-
-## Model Training
-
-<details>
-<summary>train.py</summary>
-
-</details>
-
-***
-
 ## Model Inference
 <details>
 <summary>inference.py</summary>
+
+Script to perform model diagnosis for a given H&E slide or P53 slide, which can be a single slide or multiple slides. 
+
+Takes a model architecture and path to associated model weights and determines the optimal threshold for considering the cutoff for Atypia in H&E, or aberrant positive columnar tissue in P53 slides.
+
+Outputs a proposed model threshold to achieve best results vs pathologist reviews using AUC and AUPRC.
+
+Arguments:
+```
+--dataset, Flag to change behaviour depending on the dataset, determines whether to handle consider postive control tissue (delta) and mapping of labels from Y/N to 1/0.
+
+Slide properties:
+--stain, choices are "he" or "p53" - Flag to specify the type of data being used
+--slide_path, Path to Slide(s) location/root folder
+--format, WSI Extension name, default is .ndpi
+--tile_size, Size of tile to generate for model input, default is 400 pixels
+--overlap, Fraction of tile edge to extract with overlapping neighboring tiles
+--foreground_only, Flag to detect foreground of slide and only perform analysis on tissue
+--labels, CSV file containing pathologist ground truth
+
+Model and path to model weights
+--network, defaults to VGG 16, specify architecture to use: see models for available
+--model_path, path to stored model weights, must specify
+
+Atypia classes to consider (i.e. H&E slides):
+--dysplasia_separate, Flag whether to separate the atypia of uncertain significance and dysplasia
+--respiratory_separate, Flag whether to separate the respiratory mucosa cilia and respiratory mucosa
+--gastric_separate, Flag whether to separate the tickled up columnar and gastric cardia
+--atypia_separate, lag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other
+
+P53 classes to consider (i.e. P53 slides):
+--p53_separate, Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar
+
+Data prepocessing:
+--channel_means, Channel Means as a list to normalise around, default is the BEST2 channel averages i.e. [0.7747305964175918, 0.7421753839460998, 0.7307385516144509],
+--channel_stds, Channel standard deviation to normalise around, default is the BEST2 channel std i.e. [0.2105364799974944, 0.2123423033814637, 0.20617556948731974]
+--batch_size, Batch size to infer on, defaults to architecture determined batch size
+--num_workers, Number of CPU workers
+
+Specify script outputs:
+--output, Path to save outputs to, default is results
+--csv, Flag to save data as CSV file including tile counts
+--stats, Flag to produce associated statistical data
+--vis, Flag to dsiplay the output of the model as a heatmap of areas to analyse
+--thumbnail, Flag to save the vis thumbnail, vis must also be active
+```
 
 </details>
 

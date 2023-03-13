@@ -29,7 +29,7 @@ def parse_args():
 	parser.add_argument("--description", default='triage', help="string to save results to.")
 
 	#dataset processing
-	parser.add_argument("--stain", required=True, help="he or tff3")
+	parser.add_argument("--stain", choices=['he', 'tff3'], help="he or tff3")
 	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
 
 	#model path and parameters
@@ -54,11 +54,11 @@ def parse_args():
 	parser.add_argument("--tile_cutoff", default=6, help='number of tiles to be considered positive')
 
 	#outputs
-	parser.add_argument("--output", required=True, help="path to folder where inference maps will be stored")
+	parser.add_argument("--output", default='results', help="path to folder where inference maps will be stored")
 	parser.add_argument("--csv", action='store_true', help="Generate csv output file")
-	parser.add_argument('--stats', action='store_true', help='produce precision-recall plot')
-	parser.add_argument('--xml', action='store_true', help='produce annotation files for ASAP in .xml format')
-	parser.add_argument('--json', action='store_true', help='produce annotation files for QuPath in .geoJSON format')
+	parser.add_argument("--stats", action='store_true', help='produce precision-recall plot')
+	parser.add_argument("--xml", action='store_true', help='produce annotation files for ASAP in .xml format')
+	parser.add_argument("--json", action='store_true', help='produce annotation files for QuPath in .geoJSON format')
 	parser.add_argument("--vis", action='store_true', help="Display WSI with heatmap after each slide")
 	parser.add_argument("--thumbnail", action='store_true', help="Save thumbnail of WSI for analysis (vis must also be true)")
 
