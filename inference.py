@@ -30,7 +30,7 @@ def parse_args():
 
 	#dataset processing
 	parser.add_argument("--dataset", default='delta', help="Flag to switch between datasets. Currently supported: 'best'/'delta'")
-	parser.add_argument("--stain", required=True, help="he or p53")
+	parser.add_argument("--stain", choices=['he', 'p53'], required=True, help="he or p53")
 	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
 
 	#model path and parameters
@@ -59,7 +59,7 @@ def parse_args():
 	parser.add_argument("--num_workers", type=int, default=8, help="Number of workers to call for DataLoader")
 	
 	#outputs
-	parser.add_argument("--output", required=True, help="path to folder where inference maps will be stored")
+	parser.add_argument("--output", default='results', help="path to folder where inference maps will be stored")
 	parser.add_argument("--csv", action='store_true', help="Generate csv output file")
 	parser.add_argument("--vis", action='store_true', help="Display WSI after each slide")
 	parser.add_argument("--thumbnail", action='store_true', help="Save thumbnail of WSI for analysis (vis must also be true)")
