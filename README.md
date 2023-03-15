@@ -45,12 +45,12 @@ pip install slidl
 
 ## Quality Control:
 
-<details>
-<summary>quality_control.py</summary>
-
 This file interprets the suitability of a given cytosponge slide from a patient. This code takes in a H&E or TFF3 slide and outputs a count for the number of target tiles and secondary tiles as well as an optional annotation file for viewing.
 
 By default, this file uses the VGG-16 network, which is trained separately to perform quality control analysis on H&E slides (i.e. Gastric-columnar Epithelium and Intestinal Metaplasia detection), or Goblet cell detection from TFF3 slides, with thresholds determined from the paper.
+
+<details>
+<summary>quality_control.py</summary>
 
 Arguments:
 ```
@@ -89,6 +89,7 @@ Specify script outputs:
 --vis, Flag to dsiplay the output of the model as a heatmap of areas to analyse
 --thumbnail, Flag to save the vis thumbnail, vis must also be active
 ```
+</details>
 
 If you use this code please cite the original paper using the citation below:
 ```
@@ -103,10 +104,12 @@ If you use this code please cite the original paper using the citation below:
   publisher={Nature Publishing Group US New York}
 }
 ```
-</details>
-
 ***
-## Model Inference
+## Triage and Automated Diagnosis
+The below scripts are used to determine the operating and triage thresholds for the trained model on a given dataset.
+
+First use the inference.py script to generate the model files and associated prediction data for the given slides. These are then used to determine the model accuracy using the evaluate.py script or use the visualise.py script to output the model annotations in a format which can be viewed in ASAP (.xml) or QuPath (.geojson). 
+
 <details>
 <summary>inference.py</summary>
 
@@ -155,22 +158,93 @@ Specify script outputs:
 --vis, Flag to dsiplay the output of the model as a heatmap of areas to analyse
 --thumbnail, Flag to save the vis thumbnail, vis must also be active
 ```
-
 </details>
 
-## Model Evaluation
 <details>
 <summary>evaluate.py</summary>
 
+This script generates the model's results from P53 and H&E slides for a given threshold.
+
+This can generate results for either H&E or P53 separately, but if both are provided then also triages patients based on collective traige analysis.
+
+Arguments:
+```
+General
+--description, Descriptive string to save results to, defaults to triage
+--format, suffix extension of whole slide images, default is .ndpi
+
+Labels:
+--from-file, Generate stats from existing csv file, takes path to existing data
+--labels, CSV file containing slide-level pathologist ground truth to compare against
+
+Atypia classes to consider (i.e. H&E slides):
+--dysplasia_separate, Flag whether to separate the atypia of uncertain significance and dysplasia
+--respiratory_separate, Flag whether to separate the respiratory mucosa cilia and respiratory mucosa
+--gastric_separate, Flag whether to separate the tickled up columnar and gastric cardia
+--atypia_separate, lag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other
+
+P53 classes to consider (i.e. P53 slides):
+--p53_separate, Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar
+
+H&E arguments
+--he_path, slide root folder for H&E images
+--he_inference, path to directory containing H&E inference file(s)
+--he_threshold, A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53), default is 0.99
+
+P53 arguments
+--p53_path, slide root folder for P53 images
+--p53_inference, path to directory containing P53 inference file(s)
+--p53_threshold, A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53), default is 0.99
+--control, CSV containing control tissue location.
+
+Ouptput arguments
+--output, output path to folder where inference maps will be stored, defaults to results
+--csv, Flag to output results as csv
+```
 </details>
 
-## Model Visualisation
 <details>
 <summary>visualize.py</summary>
+Generate annotation files from model inference files, which can be viewable in ASAP (.xml) format or QuPath (.geojson) format.
 
+Arguments:
+```
+General
+--description, Description, string to save results to.
+--stain, he or p53
+--labels, file containing slide-level ground truth to use
+--target, Target class to identify, if None then defaults to stain class.
+--gt, Column containing ground truth labels
+
+Input
+--slide_path, slides root folder
+--format, Extension of whole slide images, default is .ndpi
+--inference, path to directory containing inference file(s)
+	
+Atypia classes to consider (i.e. H&E slides):
+--dysplasia_separate, Flag whether to separate the atypia of uncertain significance and dysplasia
+--respiratory_separate, Flag whether to separate the respiratory mucosa cilia and respiratory mucosa
+--gastric_separate, Flag whether to separate the tickled up columnar and gastric cardia
+--atypia_separate, lag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other
+
+P53 classes to consider (i.e. P53 slides):
+--p53_separate, Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar
+
+Thresholds
+--triage_threshold, A lower threshold for target classes (atypia tiles for H&E, aberrant P53 columnar for P53) for triage, default is not to extract these tiles and 0.99
+--automated_threshold, Automated threshold with high confidence to mark for the annotation file, default is 0.999
+
+Outputs
+--output, path to folder where inference maps will be stored
+--xml, Flag to output annotation file in ASAP .xml format
+--json, Flag to output annotation file in QuPath .geojson format
+--tiles, Save tile images (as .jpg)
+--vis, Flag to save thumbnail as heatmaps
+
+```
 </details>
 
-If you use any of the work published in this paper please use the reference below:
+If you use any of the work published in this paper please consider citing us using the reference below:
 ```
 @article{pilonis2022use,
   title={Use of a Cytosponge biomarker panel to prioritise endoscopic Barrett's oesophagus surveillance: a cross-sectional study followed by a real-world prospective pilot},

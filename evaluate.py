@@ -12,22 +12,9 @@ from dataset_processing import class_parser
 def parse_args():
 	parser = argparse.ArgumentParser(description='Plot inference tiles')
 	parser.add_argument("--description", default='triage', help="string to save results to.'")
+
+	parser.add_argument("--from-file", help="generate stats from existing run.'")
 	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
-
-	parser.add_argument("--from-file", help="genereate stats from existing run.'")
-
-	parser.add_argument("--he_path", default=None, help="he slides root folder")
-	parser.add_argument("--he_inference", default=None, help="path to directory containing atpyia inference file(s)")
-	parser.add_argument("--he_threshold", help="A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53)")
-
-	parser.add_argument("--p53_path", default=None, help="p53 slides root folder")
-	parser.add_argument("--p53_inference", default=None, help="path to directory containing p53 inference file(s)")
-	parser.add_argument("--p53_threshold", help="A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53)")
-	parser.add_argument("--control", default=None, help='csv containing control tissue location.')
-
-	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
-	parser.add_argument("--output", default='results', help="path to folder where inference maps will be stored")
-	parser.add_argument("--csv", action='store_true', help="Output results to csv")
 
 	#class variables
 	parser.add_argument("--dysplasia_separate", action='store_false', help="Flag whether to separate the atypia of uncertain significance and dysplasia classes")
@@ -35,6 +22,20 @@ def parse_args():
 	parser.add_argument("--gastric_separate", action='store_false', help="Flag whether to separate the tickled up columnar and gastric cardia classes")
 	parser.add_argument("--atypia_separate", action='store_false', help="Flag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other")
 	parser.add_argument("--p53_separate", action='store_false', help="Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar")
+
+	parser.add_argument("--he_path", default=None, help="he slides root folder")
+	parser.add_argument("--he_inference", default=None, help="path to directory containing atpyia inference file(s)")
+	parser.add_argument("--he_threshold", default=0.99, help="A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53)")
+
+	parser.add_argument("--p53_path", default=None, help="p53 slides root folder")
+	parser.add_argument("--p53_inference", default=None, help="path to directory containing p53 inference file(s)")
+	parser.add_argument("--p53_threshold",  default=0.99, help="A threshold above or equal to target tiles (atypia tiles for H&E, aberrant P53 columnar for P53)")
+	parser.add_argument("--control", default=None, help='csv containing control tissue location.')
+
+	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
+	parser.add_argument("--output", default='results', help="path to folder where inference maps will be stored")
+	parser.add_argument("--csv", action='store_true', help="Output results to csv")
+
 
 	args = parser.parse_args()
 	return args
@@ -45,10 +46,7 @@ if __name__ == '__main__':
 	he_classes = class_parser('he', args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate)
 	he_root = args.he_path
 	he_inference_root = args.he_inference
-	if args.he_threshold is not None:
-		he_threshold = float(args.he_threshold)
-	else:
-		he_threshold = 0.99
+	he_threshold = float(args.he_threshold)
 
 	atypia_hcn_triage_threshold = 0
 	atypia_hcp_triage_threshold = 10
