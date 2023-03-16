@@ -14,7 +14,7 @@ from dataset_processing import class_parser
 def parse_args():
 	parser = argparse.ArgumentParser(description='Plot inference tiles')
 	parser.add_argument("--description", default='triage', help="string to save results to.")
-	parser.add_argument("--stain", required=True, help="he or p53")
+	parser.add_argument("--stain", choices=['he', 'p53'], required=True, help="he or p53")
 	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
 	parser.add_argument("--target", type=str, default=None, help="Target class to identify, if None then defaults to stain class.")
 	parser.add_argument("--gt", type=str, default=None, help="Column containing ground truth labels")

@@ -6,8 +6,9 @@ Triage-driven diagnosis of Barrett’s esophagus for early detection of esophage
 
 Use of a Cytosponge biomarker panel to prioritise endoscopic Barrett's oesophagus surveillance: a cross-sectional study followed by a real-world prospective pilot - [Paper](https://doi.org/10.1016/S1470-2045(21)00667-7) [Code](https://github.com/markowetzlab/barretts-progression-detection)
 
-## Requirements
+Trained model weights can be found at the following link: [Weights](https://drive.google.com/drive/folders/1XYv1OdUg_z_t0GXq2k2a9hhSxlTXvxuZ?usp=sharing)
 
+## Requirements
 <details>
 <summary> Cloning the Repository </summary>
 
@@ -38,7 +39,6 @@ Finally, as Slidl is not available through conda:
 ```
 pip install slidl
 ```
-
 </details>
 
 ***

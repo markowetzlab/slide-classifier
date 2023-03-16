@@ -37,7 +37,7 @@ def parse_args():
 	parser.add_argument("--model_path", required=True, help="path to stored model weights")
 
 	#slide paths and tile properties
-	parser.add_argument("--slide_path", required=True, help="slides root folder")
+	parser.add_argument("--slide_path", default='DELTA/slides', help="slides root folder")
 	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
 	parser.add_argument("--tile_size", default=400, help="architecture tile size")
 	parser.add_argument("--overlap", default=0, help="what fraction of the tile edge neighboring tiles should overlap horizontally and vertically (default is 0)")
