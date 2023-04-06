@@ -120,6 +120,7 @@ if __name__ == '__main__':
 
 	prob_thresh = np.append(np.arange(0, 0.9, 0.1), np.arange(0.91, 0.99, 0.01))
 	prob_thresh = np.append(prob_thresh, np.arange(0.999, 0.9999, 0.0001))
+	# prob_thresh = np.append(prob_thresh, 0.999)
 	prob_thresh = np.round(prob_thresh, 7)
 
 	if not os.path.exists(output_path):

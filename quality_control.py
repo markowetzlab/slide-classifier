@@ -260,7 +260,7 @@ if __name__ == '__main__':
 							status = str(secondary_class)
 						else:
 							color = [0, 0, 0]
-							status = tile_info
+							status = str(key)
 						
 						json_annotations['features'].append({
 							"type": "Feature",
@@ -279,6 +279,7 @@ if __name__ == '__main__':
 							},
 							"properties": {
 								"objectType": "annotation",
+								"name": str(status)+'_'+str(round(tile_info[status+'_probability'], 4))+'_'+str(tile_info['x']) +'_'+str(tile_info['y']),
 								"classification": {
 									"name": status,
 									"color": color
@@ -322,5 +323,9 @@ if __name__ == '__main__':
 		fpr, tpr, threshs = roc_curve(gt, pred)
 		precision, recall, thresholds = precision_recall_curve(gt_col, pred_col)
 
-		print(confusion_matrix(gt, pred))
+		tn, fp, fn, tp = confusion_matrix(gt, pred).ravel()
+		print(f'CM\tGT Positive\tGT Negative')
+		print(f'Pred Positive\t{tp}\t{fp}')
+		print(f'Pred Negative\t{fn}\t{tn}')
+
 		print(classification_report(gt, pred))

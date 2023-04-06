@@ -111,9 +111,12 @@ if __name__ == '__main__':
 			if p53_inference_root is not None:
 				ranked_class = 'aberrant_positive_columnar'
 				
-				p53_file = row['P53']
-				p53_inference = p53_file.replace(args.format, '_inference.pml')
-
+				try:
+					p53_file = row['P53']
+					p53_inference = p53_file.replace(args.format, '_inference.pml')
+				except:
+					continue
+				
 				p53_slide = os.path.join(p53_root, p53_file)
 				p53_inference = os.path.join(p53_inference_root, p53_inference)
 
@@ -246,7 +249,9 @@ if __name__ == '__main__':
 		print('Precision: ', precision)
 		print('F1: ', f1, '\n')
 
-		print(confusion_matrix(gt, results))
+		print(f'H+E CM\tGT Positive\tGT Negative')
+		print(f'Pred Positive\t{tp}\t{fp}')
+		print(f'Pred Negative\t{fn}\t{tn}')
 
 		print(classification_report(gt, results))
 
@@ -271,7 +276,9 @@ if __name__ == '__main__':
 		print('Precision: ', precision)
 		print('F1: ', f1, '\n')
 
-		print(confusion_matrix(gt, results))
+		print(f'P53 CM\tGT Positive\tGT Negative')
+		print(f'Pred Positive\t{tp}\t{fp}')
+		print(f'Pred Negative\t{fn}\t{tn}')
 
 		print(classification_report(gt, results))
 
