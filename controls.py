@@ -4,7 +4,7 @@ import os
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (roc_auc_score, precision_score, recall_score, f1_score,
-				classification_report, confusion_matrix, ConfusionMatrixDisplay)
+				classification_report, confusion_matrix)
 from slidl.slide import Slide
 
 from dataset_processing import class_parser
@@ -67,8 +67,8 @@ if __name__ == '__main__':
 
 		inference_suffix = '_triage.pml'
 
-		hcn_triage_threshold = 0
-		hcp_triage_threshold = 6
+		hcn_triage_threshold = 3
+		hcp_triage_threshold = 40
 
 	output_path = args.output
 
@@ -100,14 +100,14 @@ if __name__ == '__main__':
 
 			try:
 				file = row[case_path]
-				inference = file.replace(args.format, inference_suffix)
+				inference_file = file.replace(args.format, inference_suffix)
 			except:
 				continue
 
 			case_slide = os.path.join(root, file)
-			inference = os.path.join(inference_root, inference)
+			inference_path = os.path.join(inference_root, inference_file)
 
-			slide = Slide(inference, newSlideFilePath=case_slide)
+			slide = Slide(inference_path, newSlideFilePath=case_slide)
 
 			X_tiles = slide.numTilesInX
 			Y_tiles = slide.numTilesInY
@@ -191,7 +191,9 @@ if __name__ == '__main__':
 
 	if args.csv:
 		control_df = pd.DataFrame.from_dict(controls)
-		control_df.to_csv(os.path.join(args.output, args.description+'.csv'), index=False)
+		control_path = os.path.join(args.output, args.description+'.csv')
+		control_df.to_csv(control_path, index=False)
+		print(f'Controls saved to {control_path}')
 
 	df['Results'] = (df['Tiles'] > hcn_triage_threshold).astype(int)
 	results = df['Results'].astype(int).tolist()

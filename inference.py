@@ -31,7 +31,7 @@ def parse_args():
 	#dataset processing
 	parser.add_argument("--dataset", default='delta', help="Flag to switch between datasets. Currently supported: 'best'/'delta'")
 	parser.add_argument("--stain", choices=['he', 'p53'], required=True, help="he or p53")
-	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
+	parser.add_argument("--labels", default=None, help="file containing slide-level ground truth to use.'")
 
 	#model path and parameters
 	parser.add_argument("--network", required=True, help="which CNN architecture to use")
@@ -139,14 +139,15 @@ if __name__ == '__main__':
 		print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
 	data_transforms = image_transforms(channel_means, channel_stds, patch_size)['val']
 
-	if os.path.isfile(args.labels):
-		labels = pd.read_csv(args.labels, index_col=0)
-		labels[ranked_label] = labels[ranked_label].fillna('N')
-		labels.sort_index(inplace=True)
-		if not args.dataset == 'best':
-			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0))
-	else:
-		raise AssertionError('Not a valid path for ground truth labels.')
+	if args.labels is not None:
+		if os.path.isfile(args.labels):
+			labels = pd.read_csv(args.labels, index_col=0)
+			labels[ranked_label] = labels[ranked_label].fillna('N')
+			labels.sort_index(inplace=True)
+			if not args.dataset == 'best':
+				labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0))
+		else:
+			raise AssertionError('Not a valid path for ground truth labels.')
 
 	data_list = []
 

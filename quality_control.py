@@ -3,6 +3,7 @@
 import argparse
 import os
 import time
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import geojson
@@ -17,11 +18,11 @@ from models import get_network
 from utils.visualisation.display_slide import slide_image
 from slidl.utils.torch.WholeSlideImageDataset import WholeSlideImageDataset
 
-from sklearn.metrics import (average_precision_score, precision_recall_curve, roc_auc_score, roc_curve, classification_report,
-			     confusion_matrix)
+from sklearn.metrics import (roc_auc_score, precision_score, recall_score, f1_score,
+				classification_report, confusion_matrix)
 
 import warnings
-warnings.filterwarnings('always')
+warnings.filterwarnings('ignore')
 
 def parse_args():
 	parser = argparse.ArgumentParser(description='Run inference on slides.')
@@ -30,7 +31,7 @@ def parse_args():
 
 	#dataset processing
 	parser.add_argument("--stain", choices=['he', 'tff3'], help="he or tff3")
-	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
+	parser.add_argument("--labels", default=None, help="file containing slide-level ground truth to use.'")
 
 	#model path and parameters
 	parser.add_argument("--network", default='vgg_16', help="which CNN architecture to use")
@@ -51,7 +52,10 @@ def parse_args():
 	
 	parser.add_argument("--qc_threshold", default=0.99, help="A threshold for detecting gastric cardia in H&E")
 	parser.add_argument("--tff3_threshold", default= 0.93, help="A threshold for Goblet cell detection in tff3")
-	parser.add_argument("--tile_cutoff", default=6, help='number of tiles to be considered positive')
+	parser.add_argument("--lcp_cutoff", default=None, help='number of tiles to be considered high confidence negative')
+	parser.add_argument("--hcp_cutoff", default=None, help='number of tiles to be considered high confidence positive')
+	parser.add_argument("--impute", action='store_true', help="Assume missing data as negative")
+	parser.add_argument("--control", default=None, help='csv containing control tissue location from control.py.')
 
 	#outputs
 	parser.add_argument("--output", default='results', help="path to folder where inference maps will be stored")
@@ -84,6 +88,14 @@ if __name__ == '__main__':
 		secondary_class = 'Intestinal Metaplasia'
 		thresh = args.qc_threshold
 		mapping = {'Adequate for pathological review': 1, 'Scant columnar cells': 0, 'Squamous cells only': 0, 'Insufficient cellular material': 0}
+		if args.lcp_cutoff is not None:
+			lcp_triage_threshold = args.lcp_cutoff
+		else:
+			lcp_triage_threshold = 0 
+		if args.hcp_cutoff is not None:
+			hcp_triage_threshold = args.hcp_cutoff
+		else:
+			hcp_triage_threshold = 95
 	elif stain == 'tff3':
 		file_name = 'TFF3'
 		gt_label = 'TFF3 positive'
@@ -92,6 +104,14 @@ if __name__ == '__main__':
 		secondary_class = 'Equivocal'
 		thresh = args.tff3_threshold
 		mapping = {'Y': 1, 'N': 0}
+		if args.lcp_cutoff is not None:
+			lcp_triage_threshold = args.lcp_cutoff
+		else:
+			lcp_triage_threshold = 3
+		if args.hcp_cutoff is not None:
+			hcp_triage_threshold = args.hcp_cutoff
+		else:
+			hcp_triage_threshold = 40
 	else:
 		raise AssertionError('Stain must be he or tff3.')
 
@@ -124,7 +144,9 @@ if __name__ == '__main__':
 		os.makedirs(output_path, exist_ok=True)
 	print("Outputting inference to: ", output_path)
 
-	csv_path = os.path.join(output_path, network + '-' + stain + '-prediction-data.csv')
+	csv_path = os.path.join(output_path, args.description + '-prediction-data.csv')
+	if args.control is not None:
+		controls = pd.read_csv(args.control, index_col='CYT ID')
 
 	channel_means = args.channel_means
 	channel_stds = args.channel_stds
@@ -133,13 +155,27 @@ if __name__ == '__main__':
 
 	data_transforms = image_transforms(channel_means, channel_stds, patch_size)['val']
 
-	if os.path.isfile(args.labels):
-		labels = pd.read_csv(args.labels, index_col=0)
-		labels[gt_label] = labels[gt_label].fillna('N')
-		labels.sort_index(inplace=True)
-		labels[gt_label] = labels[gt_label].map(mapping)
+	if args.labels is not None:
+		if os.path.isfile(args.labels):
+			labels = pd.read_csv(args.labels, index_col=0)
+			labels.dropna(subset=[file_name], inplace=True)
+			if args.impute:
+				labels[gt_label] = labels[gt_label].fillna('N')
+			else:
+				labels.dropna(subset=[gt_label], inplace=True)
+			labels.sort_index(inplace=True)
+			labels[gt_label] = labels[gt_label].map(mapping)
+		else:
+			raise AssertionError('Not a valid path for ground truth labels.')
 	else:
-		raise AssertionError('Not a valid path for ground truth labels.')
+		slides = []
+		for file in os.listdir(slide_path):
+			if file.endswith(('.ndpi','.svs')):
+				slides.append(file)
+		slides = sorted(slides)
+		labels = pd.DataFrame(slides, columns=[file_name])
+		labels[gt_label] = 0
+
 
 	data_list = []
 
@@ -158,7 +194,7 @@ if __name__ == '__main__':
 			print(f'File {case_path} not found.')
 			continue
 		if not args.silent:
-			print(f'Processing case {case_number}/{len(labels)}: ', end='')
+			print(f'\rProcessing case {case_number}/{len(labels)}: ', end='')
 
 		inference_output = os.path.join(output_path, 'triage')
 		if not os.path.exists(inference_output):
@@ -167,7 +203,7 @@ if __name__ == '__main__':
 
 		if os.path.isfile(slide_output + '.pml'):
 			if not args.silent:
-				print(f"Case {index} already processed")
+				print(f'\rCase {index} already processed.')
 			slidl_slide = Slide(slide_output + '.pml', newSlideFilePath=case_path)
 		else:
 			slidl_slide = Slide(case_path).setTileProperties(tileSize=tile_size, tileOverlap=float(args.overlap))
@@ -208,7 +244,28 @@ if __name__ == '__main__':
 		data = {'CYT ID': index, 'Case Path': case_file, 'Ground Truth Label': row[gt_label]}
 
 		for class_name in classes:
-			class_tiles = slidl_slide.numTilesAboveClassPredictionThreshold(classToThreshold=class_name, probabilityThresholds=thresh)
+			if args.control is not None:
+				X_tiles = slidl_slide.numTilesInX
+				Y_tiles = slidl_slide.numTilesInY
+				X_control = round(X_tiles/4)
+				Y_control = round(Y_tiles/4)
+	
+				control_loc = controls.loc[index]
+				class_tiles = 0
+				for tile_address, tile_entry in slidl_slide.tileDictionary.items():
+					if tile_entry['classifierInferencePrediction'][class_name] >= thresh:
+						if tile_address[0] < X_control and control_loc['L'] == 1:
+							continue
+						elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
+							continue
+						elif Y_tiles - Y_control < tile_address[1] and (control_loc['B'] == 1 and (control_loc['L'] == 0 or control_loc['R'] == 0)):
+							continue
+						elif tile_address[1] < Y_control and (control_loc['T'] == 1 and (control_loc['L'] == 0 or control_loc['R'] == 0)):
+							continue
+						else:
+							class_tiles += 1
+			else:
+				class_tiles = slidl_slide.numTilesAboveClassPredictionThreshold(classToThreshold=class_name, probabilityThresholds=thresh)
 			data.update({class_name+' Tiles': class_tiles})
 		data_list.append(data)
 
@@ -245,7 +302,7 @@ if __name__ == '__main__':
 					with open(xml_path, "w") as annotation_file:
 						annotation_file.write(xml_header + xml_annotations + xml_tail)
 				else:
-					print('Automated xml annotation file already exists...')
+					print('Automated xml annotation file already exists.')
 
 			if args.json:
 				json_path = os.path.join(annotation_path, slide_name+'_inference_'+stain+'_qc.geojson')
@@ -290,7 +347,7 @@ if __name__ == '__main__':
 					with open(json_path, "w") as annotation_file:
 						geojson.dump(json_annotations, annotation_file, indent=0)
 				else:
-					print('Automated geojson annotation file already exists...')
+					print('Automated geojson annotation file already exists')
 
 		if args.vis:
 			slide_im = slide_image(slidl_slide, stain, classes)
@@ -307,25 +364,63 @@ if __name__ == '__main__':
 			plt.close('all')
 
 	df = pd.DataFrame.from_dict(data_list)
-	if args.csv:
-		df.to_csv(csv_path, index_label='CYT ID')
 
 	if args.stats:
 		gt_col = df['Ground Truth Label']
 		gt = gt_col.tolist()
 
 		pred_col = df[ranked_class+ ' Tiles']
-		pred = (pred_col > args.tile_cutoff).astype(int).tolist()
-
-		auc_data = roc_auc_score(gt, pred)
-		auprc_data = average_precision_score(gt, pred)
-		
-		fpr, tpr, threshs = roc_curve(gt, pred)
-		precision, recall, thresholds = precision_recall_curve(gt_col, pred_col)
+		print(f'\nLCP Tile Threshold ({lcp_triage_threshold})')
+		df['LCP'] = pred_col.gt(int(lcp_triage_threshold)).astype(int)
+		pred = df[f'LCP'].tolist()
 
 		tn, fp, fn, tp = confusion_matrix(gt, pred).ravel()
-		print(f'CM\tGT Positive\tGT Negative')
+		auc = roc_auc_score(gt, pred)
+		precision = precision_score(gt, pred)
+		recall = recall_score(gt, pred)
+		f1 = f1_score(gt, pred)
+		
+		print('AUC: ', auc)
+		print('Sensitivity: ', recall)
+		print('Specificity: ', tn/(tn+fp))
+		print('Precision: ', precision)
+		print('F1: ', f1, '\n')
+
+		print(f'CM \tGT Positive\tGT Negative')
 		print(f'Pred Positive\t{tp}\t{fp}')
 		print(f'Pred Negative\t{fn}\t{tn}')
 
 		print(classification_report(gt, pred))
+
+		print(f'\nHCP Tile Threshold ({hcp_triage_threshold})')
+		df['HCP'] = pred_col.gt(int(hcp_triage_threshold)).astype(int)
+		pred = df[f'HCP'].tolist()
+
+		tn, fp, fn, tp = confusion_matrix(gt, pred).ravel()
+		auc = roc_auc_score(gt, pred)
+		precision = precision_score(gt, pred)
+		recall = recall_score(gt, pred)
+		f1 = f1_score(gt, pred)
+		
+		print('AUC: ', auc)
+		print('Sensitivity: ', recall)
+		print('Specificity: ', tn/(tn+fp))
+		print('Precision: ', precision)
+		print('F1: ', f1, '\n')
+
+		print(f'CM \tGT Positive\tGT Negative')
+		print(f'Pred Positive\t{tp}\t{fp}')
+		print(f'Pred Negative\t{fn}\t{tn}')
+
+		print(classification_report(gt, pred))
+
+		results = [
+			(df['LCP'] == 0) & (df['HCP'] == 0),
+			(df['LCP'] == 1) & (df['HCP'] == 0),
+			(df['LCP'] == 1) & (df['HCP'] == 1)
+		]
+		values = ['hcn', 'lcp', 'hcp']
+		df['Result'] = np.select(results, values)
+
+	if args.csv:
+		df.to_csv(csv_path, index_label='CYT ID')
