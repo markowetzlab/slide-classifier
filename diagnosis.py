@@ -13,6 +13,7 @@ from tqdm import tqdm
 import torch
 from slidl.slide import Slide
 
+from dataset_processing import class_parser
 from dataset_processing.image import image_transforms
 from models import get_network
 from utils.visualisation.display_slide import slide_image
@@ -27,10 +28,10 @@ warnings.filterwarnings('ignore')
 def parse_args():
 	parser = argparse.ArgumentParser(description='Run inference on slides.')
 
-	parser.add_argument("--description", default='triage', help="string to save results to.")
+	parser.add_argument("--description", default='diagnosis', help="string to save results to.")
 
 	#dataset processing
-	parser.add_argument("--stain", choices=['he', 'tff3'], help="he or tff3")
+	parser.add_argument("--stain", choices=['he', 'p53'], help="he or p53")
 	parser.add_argument("--labels", default=None, help="file containing slide-level ground truth to use.'")
 
 	#model path and parameters
@@ -45,17 +46,24 @@ def parse_args():
 	parser.add_argument("--foreground_only", action='store_true', help="Foreground with tissue only")
 	
 	#data processing
-	parser.add_argument("--channel_means", default= [0.485, 0.456, 0.406], help="0-1 normalized color channel means for all tiles on dataset separated by commas, e.g. 0.485,0.456,0.406 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
-	parser.add_argument("--channel_stds", default= [0.229, 0.224, 0.225], help="0-1 normalized color channel standard deviations for all tiles on dataset separated by commas, e.g. 0.229,0.224,0.225 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
+	parser.add_argument("--channel_means", default=[0.7747305964175918, 0.7421753839460998, 0.7307385516144509], help="0-1 normalized color channel means for all tiles on dataset separated by commas, e.g. 0.485,0.456,0.406 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
+	parser.add_argument("--channel_stds", default=[0.2105364799974944, 0.2123423033814637, 0.20617556948731974], help="0-1 normalized color channel standard deviations for all tiles on dataset separated by commas, e.g. 0.229,0.224,0.225 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
 	parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.")
 	parser.add_argument("--num_workers", type=int, default=8, help="Number of workers to call for DataLoader")
 	
-	parser.add_argument("--qc_threshold", default=0.99, help="A threshold for detecting gastric cardia in H&E")
-	parser.add_argument("--tff3_threshold", default= 0.93, help="A threshold for Goblet cell detection in tff3")
+	parser.add_argument("--he_threshold", default=0.9993, help="A threshold for detecting gastric cardia in H&E")
+	parser.add_argument("--p53_threshold", default= 0.999, help="A threshold for Goblet cell detection in p53")
 	parser.add_argument("--lcp_cutoff", default=None, help='number of tiles to be considered high confidence negative')
 	parser.add_argument("--hcp_cutoff", default=None, help='number of tiles to be considered high confidence positive')
 	parser.add_argument("--impute", action='store_true', help="Assume missing data as negative")
 	parser.add_argument("--control", default=None, help='csv containing control tissue location from control.py.')
+
+	#class variables
+	parser.add_argument("--dysplasia_separate", action='store_false', help="Flag whether to separate the atypia of uncertain significance and dysplasia classes")
+	parser.add_argument("--respiratory_separate", action='store_false', help="Flag whether to separate the respiratory mucosa cilia and respiratory mucosa classes")
+	parser.add_argument("--gastric_separate", action='store_false', help="Flag whether to separate the tickled up columnar and gastric cardia classes")
+	parser.add_argument("--atypia_separate", action='store_false', help="Flag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other")
+	parser.add_argument("--p53_separate", action='store_false', help="Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar")
 
 	#outputs
 	parser.add_argument("--output", default='results', help="path to folder where inference maps will be stored")
@@ -82,38 +90,37 @@ if __name__ == '__main__':
 
 	if stain == 'he':
 		file_name = 'H&E'
-		gt_label = 'QC Report'
-		classes = ['Background', 'Gastric-type columnar epithelium', 'Intestinal Metaplasia', 'Respiratory-type columnar epithelium']
-		ranked_class = 'Gastric-type columnar epithelium'
+		gt_label = 'Atypia'
+		classes = class_parser('he', args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
+		ranked_class = 'atypia'
 		secondary_class = 'Intestinal Metaplasia'
-		thresh = args.qc_threshold
+		thresh = args.he_threshold
 		mapping = {'Adequate for pathological review': 1, 'Scant columnar cells': 0, 'Squamous cells only': 0, 'Insufficient cellular material': 0, 'Food material': 0}
 		if args.lcp_cutoff is not None:
-			lcp_triage_threshold = args.lcp_cutoff
+			lcp_threshold = args.lcp_cutoff
 		else:
-			lcp_triage_threshold = 0 
+			lcp_threshold = 0 
 		if args.hcp_cutoff is not None:
-			hcp_triage_threshold = args.hcp_cutoff
+			hcp_threshold = args.hcp_cutoff
 		else:
-			hcp_triage_threshold = 95
-	elif stain == 'tff3':
-		file_name = 'TFF3'
-		gt_label = 'TFF3 positive'
-		classes = ['Equivocal', 'Negative', 'Positive']
-		ranked_class = 'Positive'
-		secondary_class = 'Equivocal'
-		thresh = args.tff3_threshold
+			hcp_threshold = 10
+	elif stain == 'p53':
+		file_name = 'P53'
+		gt_label = 'P53 Positive'
+		classes = class_parser('p53', args.p53_separate)
+		ranked_class = 'aberrant_positive_columnar'
+		thresh = args.p53_threshold
 		mapping = {'Y': 1, 'N': 0}
 		if args.lcp_cutoff is not None:
-			lcp_triage_threshold = args.lcp_cutoff
+			lcp_threshold = args.lcp_cutoff
 		else:
-			lcp_triage_threshold = 3
+			lcp_threshold = 0
 		if args.hcp_cutoff is not None:
-			hcp_triage_threshold = args.hcp_cutoff
+			hcp_threshold = args.hcp_cutoff
 		else:
-			hcp_triage_threshold = 40
+			hcp_threshold = 2
 	else:
-		raise AssertionError('Stain must be he or tff3.')
+		raise AssertionError('Stain must be he or p53.')
 
 	trained_model, params = get_network(network, class_names=classes, pretrained=False)
 	try:
@@ -175,7 +182,6 @@ if __name__ == '__main__':
 		labels.set_index(file_name)
 		labels[gt_label] = 0
 
-
 	data_list = []
 
 	case_number = 0
@@ -195,10 +201,10 @@ if __name__ == '__main__':
 		if not args.silent:
 			print(f'\rProcessing case {case_number}/{len(labels)}: ', end='')
 
-		inference_output = os.path.join(output_path, 'triage')
+		inference_output = os.path.join(output_path, 'inference')
 		if not os.path.exists(inference_output):
 			os.makedirs(inference_output)
-		slide_output = os.path.join(inference_output, slide_name+'_triage')
+		slide_output = os.path.join(inference_output, slide_name+'_inference')
 
 		if os.path.isfile(slide_output + '.pml'):
 			if not args.silent:
@@ -370,8 +376,8 @@ if __name__ == '__main__':
 		gt = gt_col.tolist()
 
 		pred_col = df[ranked_class+ ' Tiles']
-		print(f'\nLCP Tile Threshold ({lcp_triage_threshold})')
-		df['LCP'] = pred_col.gt(int(lcp_triage_threshold)).astype(int)
+		print(f'\nLCP Tile Threshold ({lcp_threshold})')
+		df['LCP'] = pred_col.gt(int(lcp_threshold)).astype(int)
 		pred = df[f'LCP'].tolist()
 
 		if args.labels is not None:
@@ -391,12 +397,10 @@ if __name__ == '__main__':
 			print(f'Pred Positive\t{tp}\t{fp}')
 			print(f'Pred Negative\t{fn}\t{tn}')
 
-			print(classification_report(gt, pred))
-		else:
-			print(df['LCP'].value_counts())
+		print(classification_report(gt, pred))
 
-		print(f'\nHCP Tile Threshold ({hcp_triage_threshold})')
-		df['HCP'] = pred_col.gt(int(hcp_triage_threshold)).astype(int)
+		print(f'\nHCP Tile Threshold ({hcp_threshold})')
+		df['HCP'] = pred_col.gt(int(hcp_threshold)).astype(int)
 		pred = df[f'HCP'].tolist()
 
 		if args.labels is not None:
@@ -416,9 +420,7 @@ if __name__ == '__main__':
 			print(f'Pred Positive\t{tp}\t{fp}')
 			print(f'Pred Negative\t{fn}\t{tn}')
 
-			print(classification_report(gt, pred))
-		else:
-			print(df['HCP'].value_counts())
+		print(classification_report(gt, pred))
 
 		results = [
 			(df['LCP'] == 0) & (df['HCP'] == 0),
