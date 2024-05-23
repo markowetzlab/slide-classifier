@@ -38,7 +38,7 @@ def parse_args():
 	parser.add_argument("--model_path", required=True, help="path to stored model weights")
 
 	#slide paths and tile properties
-	parser.add_argument("--slide_path", default='DELTA/slides', help="slides root folder")
+	parser.add_argument("--slide_path", default='slides', help="slides root folder")
 	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
 	parser.add_argument("--tile_size", default=400, help="architecture tile size")
 	parser.add_argument("--overlap", default=0, help="what fraction of the tile edge neighboring tiles should overlap horizontally and vertically (default is 0)")
@@ -91,7 +91,7 @@ if __name__ == '__main__':
 		if args.lcp_cutoff is not None:
 			lcp_triage_threshold = args.lcp_cutoff
 		else:
-			lcp_triage_threshold = 0 
+			lcp_triage_threshold = 0
 		if args.hcp_cutoff is not None:
 			hcp_triage_threshold = args.hcp_cutoff
 		else:
@@ -198,6 +198,8 @@ if __name__ == '__main__':
 		inference_output = os.path.join(output_path, 'triage')
 		if not os.path.exists(inference_output):
 			os.makedirs(inference_output)
+		if str(slide_name).endswith(str(args.format)):
+			slide_name = slide_name.replace(args.format, '')
 		slide_output = os.path.join(inference_output, slide_name+'_triage')
 
 		if os.path.isfile(slide_output + '.pml'):
@@ -206,11 +208,9 @@ if __name__ == '__main__':
 			slidl_slide = Slide(slide_output + '.pml', newSlideFilePath=case_path)
 		else:
 			slidl_slide = Slide(case_path).setTileProperties(tileSize=tile_size, tileOverlap=float(args.overlap))
+			# slidl_slide.detectForeground(level=3, threshold='otsu')
 
-			if args.foreground_only:
-				slidl_slide.detectForeground(threshold=95)
-
-			dataset = WholeSlideImageDataset(slidl_slide, foregroundOnly=args.foreground_only, transform=data_transforms)
+			dataset = WholeSlideImageDataset(slidl_slide, transform=data_transforms)#, foregroundLevelThreshold='otsu')
 
 			since = time.time()
 			dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
@@ -249,21 +249,23 @@ if __name__ == '__main__':
 				Y_tiles = slidl_slide.numTilesInY
 				X_control = round(X_tiles/4)
 				Y_control = round(Y_tiles/4)
-	
+
 				control_loc = controls.loc[index]
 				class_tiles = 0
+
 				for tile_address, tile_entry in slidl_slide.tileDictionary.items():
-					if tile_entry['classifierInferencePrediction'][class_name] >= thresh:
-						if tile_address[0] < X_control and control_loc['L'] == 1:
-							continue
-						elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
-							continue
-						elif Y_tiles - Y_control < tile_address[1] and (control_loc['B'] == 1 and (control_loc['L'] == 0 or control_loc['R'] == 0)):
-							continue
-						elif tile_address[1] < Y_control and (control_loc['T'] == 1 and (control_loc['L'] == 0 or control_loc['R'] == 0)):
-							continue
-						else:
-							class_tiles += 1
+					if 'classifierInferencePrediction' in tile_entry:
+						if tile_entry['classifierInferencePrediction'][class_name] >= thresh:
+							if tile_address[0] < X_control and control_loc['L'] == 1:
+								continue
+							elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
+								continue
+							elif Y_tiles - Y_control < tile_address[1] and (control_loc['B'] == 1 and (control_loc['L'] == 0 or control_loc['R'] == 0)):
+								continue
+							elif tile_address[1] < Y_control and (control_loc['T'] == 1 and (control_loc['L'] == 0 or control_loc['R'] == 0)):
+								continue
+							else:
+								class_tiles += 1
 			else:
 				class_tiles = slidl_slide.numTilesAboveClassPredictionThreshold(classToThreshold=class_name, probabilityThresholds=thresh)
 			data.update({class_name+' Tiles': class_tiles})
