@@ -7,17 +7,17 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import geojson
-
 from tqdm import tqdm
 
 import torch
-from slidl.slide import Slide
+import torch.nn as nn
+
+from dataset_processing.masked_dataset import MaskedPatchWSIDataset
+import monai.transforms as mt
+from monai.data import DataLoader
 
 from dataset_processing import class_parser
-from dataset_processing.image import image_transforms
 from models import get_network
-from utils.visualisation.display_slide import slide_image
-from slidl.utils.torch.WholeSlideImageDataset import WholeSlideImageDataset
 
 from sklearn.metrics import (roc_auc_score, precision_score, recall_score, f1_score,
 				classification_report, confusion_matrix)
@@ -41,20 +41,23 @@ def parse_args():
 	#slide paths and tile properties
 	parser.add_argument("--slide_path", default='DELTA/slides', help="slides root folder")
 	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
-	parser.add_argument("--tile_size", default=400, help="architecture tile size")
+	parser.add_argument("--tile_size", default=400, help="tile size to extract from slide", type=int)
+	parser.add_argument("--patch_size", default=256, help="architecture tile size", type=int)
+	parser.add_argument("--patch_level", default=0, help="level of the slide to extract tiles from", type=int)
+	parser.add_argument("--mask_level", default=7, help="Mask level for foreground filtering", type=int)
+	parser.add_argument("--mask_path", default='masks', help="path to mask for foreground filtering")
 	parser.add_argument("--overlap", default=0, help="what fraction of the tile edge neighboring tiles should overlap horizontally and vertically (default is 0)")
-	parser.add_argument("--foreground_only", action='store_true', help="Foreground with tissue only")
-	parser.add_argument("--tissue_only", action='store_true', help="Apply TissueTector to segment Tissue only")
-	
+	parser.add_argument("--reader", default='openslide', help="monai slide backend reader ('openslide' or 'cuCIM')")
+
 	#data processing
 	parser.add_argument("--channel_means", default=[0.7747305964175918, 0.7421753839460998, 0.7307385516144509], help="0-1 normalized color channel means for all tiles on dataset separated by commas, e.g. 0.485,0.456,0.406 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
 	parser.add_argument("--channel_stds", default=[0.2105364799974944, 0.2123423033814637, 0.20617556948731974], help="0-1 normalized color channel standard deviations for all tiles on dataset separated by commas, e.g. 0.229,0.224,0.225 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
 	parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.")
 	parser.add_argument("--num_workers", type=int, default=8, help="Number of workers to call for DataLoader")
 	
-	parser.add_argument("--he_threshold", default=0.999, type=float, help="A threshold for detecting gastric cardia in H&E")
+	parser.add_argument("--he_threshold", default=0.99993, type=float, help="A threshold for detecting gastric cardia in H&E")
 	parser.add_argument("--p53_threshold", default= 0.99, type=float, help="A threshold for Goblet cell detection in p53")
-	parser.add_argument("--lcp_cutoff", default=None, help='number of tiles to be considered high confidence negative')
+	parser.add_argument("--lcp_cutoff", default=None, help='number of tiles to be considered low confidence positive')
 	parser.add_argument("--hcp_cutoff", default=None, help='number of tiles to be considered high confidence positive')
 	parser.add_argument("--impute", action='store_true', help="Assume missing data as negative")
 	parser.add_argument("--control", default=None, help='csv containing control tissue location from control.py.')
@@ -82,14 +85,24 @@ def parse_args():
 	args = parser.parse_args()
 	return args
 
+def torchmodify(name):
+	a = name.split('.')
+	for i,s in enumerate(a) :
+		if s.isnumeric() :
+			a[i]="_modules['"+s+"']"
+	return '.'.join(a)
+
 if __name__ == '__main__':
 	args = parse_args()
 	
 	slide_path = args.slide_path
+	patch_level = args.patch_level
 	tile_size = args.tile_size
+	mask_level = args.mask_level
 	network = args.network
 	stain = args.stain
 	output_path = args.output
+	reader = args.reader
 
 	if stain == 'he':
 		file_name = 'H&E'
@@ -154,6 +167,14 @@ if __name__ == '__main__':
 	except: 
 		trained_model = torch.load(args.model_path)
 	
+	# Modify the model to use the updated GELU activation function in later PyTorch versions 
+	for name, module in trained_model.named_modules() :
+		if isinstance(module, nn.GELU):
+			exec('trained_model.'+torchmodify(name)+'=nn.GELU()')
+
+	# if args.multi_gpu:
+		# trained_model = torch.nn.parallel.DistributedDataParallel(trained_model, device_ids=[args.local_rank], output_device=args.local_rank)
+
 	# Use manual batch size if one has been specified
 	if args.batch_size is not None:
 		batch_size = args.batch_size
@@ -161,9 +182,7 @@ if __name__ == '__main__':
 		batch_size = params['batch_size']
 	patch_size = params['patch_size']
 
-	if torch.cuda.is_available() and torch.version.hip:
-		device = torch.device("cuda")
-	elif torch.cuda.is_available() and torch.version.cuda:
+	if torch.cuda.is_available() and (torch.version.hip or torch.version.cuda):
 		device = torch.device("cuda")
 	else:
 		device = torch.device("cpu")
@@ -176,15 +195,20 @@ if __name__ == '__main__':
 	print("Outputting inference to: ", output_path)
 
 	csv_path = os.path.join(output_path, args.description + '-prediction-data.csv')
-	if args.control is not None:
-		controls = pd.read_csv(args.control, index_col='CYT ID')
 
 	channel_means = args.channel_means
 	channel_stds = args.channel_stds
 	if not args.silent:
 		print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
 
-	data_transforms = image_transforms(channel_means, channel_stds, patch_size)['val']
+	post_process_transforms = mt.Compose(
+			[
+				mt.ToMetaTensord(keys=("image")),
+				mt.Resized(keys="image", spatial_size=(patch_size,patch_size)),
+				mt.NormalizeIntensityd(keys="image", subtrahend=channel_means, 
+									divisor=channel_stds, channel_wise=True),
+			]
+		)
 
 	if args.labels is not None:
 		if os.path.isfile(args.labels):
@@ -230,90 +254,55 @@ if __name__ == '__main__':
 		if not os.path.exists(inference_output):
 			os.makedirs(inference_output)
 		slide_output = os.path.join(inference_output, slide_name+'_inference')
-
-		if os.path.isfile(slide_output + '.pml'):
-			if not args.silent:
-				print(f'\rCase {case_number}/{len(labels)} {index} already processed.', end='\r')
-			slidl_slide = Slide(slide_output + '.pml', newSlideFilePath=case_path)
+		if os.path.isfile(slide_output + '.csv'):
+			print(f'Inference for {slide_name} already exists.')
+			tiles = pd.read_csv(slide_output+'.csv')
 		else:
-			slidl_slide = Slide(case_path).setTileProperties(tileSize=tile_size, tileOverlap=float(args.overlap))
-
-			if args.foreground_only:
-				slidl_slide.detectForeground(threshold=95)
-			if args.tissue_only:
-				slidl_slide.TissueTect()
-
-			dataset = WholeSlideImageDataset(slidl_slide, foregroundOnly=args.foreground_only, transform=data_transforms)
+			slide = [{"image": f"{case_path}"}]
+			dataset = MaskedPatchWSIDataset(slide, patch_size=patch_size, patch_level=patch_level, mask_level=mask_level, transform=post_process_transforms, reader=reader, additional_meta_keys=["location", "name"])
 
 			since = time.time()
-			dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+			dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
 			tile_predictions = []
-			
+
 			with torch.no_grad():
 				print(f'\rCase {case_number}/{len(labels)} {index} processing: ')
 				for inputs in tqdm(dataloader, disable=args.silent):
-					inputTile = inputs['image'].to(device)
-					output = trained_model(inputTile)
+					tile = inputs['image'].to(device)
+					output = trained_model(tile)
 					output = output.to(device)
 
 					batch_prediction = torch.nn.functional.softmax(output, dim=1).cpu().data.numpy()
-
-					for index in range(len(inputTile)):
-						tileAddress = (inputs['tileAddress'][0][index].item(), inputs['tileAddress'][1][index].item())
+					for index in range(len(tile)):
 						preds = batch_prediction[index, ...].tolist()
 						if len(preds) != len(classes):
 							raise ValueError('Model has '+str(len(preds))+' classes but '+str(len(classes))+' class names were provided in the classes argument')
-						prediction = {}
+						tile_location = inputs['image'].meta['location'][index].numpy()
+						prediction = {'x': tile_location[0], 'y': tile_location[1]}
 						for i, pred in enumerate(preds):
 							prediction[classes[i]] = pred
-						slidl_slide.appendTag(tileAddress, 'classifierInferencePrediction', prediction)
-						tile_predictions.append(tileAddress)			
-			
-			slidl_slide.save(fileName = slide_output)
+						tile_predictions.append(prediction)
+
+			tiles = pd.DataFrame(tile_predictions)
+			if args.csv:
+				tiles.to_csv(slide_output+'.csv', index=False)
+
 			time_elapsed = time.time() - since
 			if not args.silent:
 				print('Inference complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
 
-		data = {'CYT ID': index, 'Case Path': case_file, 'Ground Truth Label': row[gt_label]}
+		counts = (tiles[ranked_class] > thresh).sum()
 
-		for class_name in classes:
-			if args.control is not None:
-				X_tiles = slidl_slide.numTilesInX
-				Y_tiles = slidl_slide.numTilesInY
-				X_control = round(X_tiles/4)
-				Y_control = round(Y_tiles/4)
-	
-				control_loc = controls.loc[index]
-				class_tiles = 0
-				for tile_address, tile_entry in slidl_slide.tileDictionary.items():
-					if tile_entry['classifierInferencePrediction'][class_name] >= thresh:
-						if tile_address[0] < X_control and control_loc['L'] == 1:
-							continue
-						elif X_tiles - X_control < tile_address[0] and control_loc['R'] == 1:
-							continue
-						elif Y_tiles - Y_control < tile_address[1] and (control_loc['B'] == 1 and (control_loc['L'] == 0 or control_loc['R'] == 0)):
-							continue
-						elif tile_address[1] < Y_control and (control_loc['T'] == 1 and (control_loc['L'] == 0 or control_loc['R'] == 0)):
-							continue
-						else:
-							class_tiles += 1
-			else:
-				class_tiles = slidl_slide.numTilesAboveClassPredictionThreshold(classToThreshold=class_name, probabilityThresholds=float(thresh))
-			data.update({class_name+' Tiles': class_tiles})
+		data = {'CYT ID': index, 'Case Path': case_file, str(ranked_class+' Tiles'): counts}
 		data_list.append(data)
-
+	
 		if args.xml or args.json:
-			ranked_dict = {}
+			positive = tiles[tiles[ranked_class] > thresh]
+
 			annotation_path = os.path.join(output_path, args.description + '_tile_annotations')
 			os.makedirs(annotation_path, exist_ok=True)
-
-			for tile_address, tile_entry in slidl_slide.tileDictionary.items():
-				for class_name, prob in tile_entry['classifierInferencePrediction'].items():
-					if class_name == ranked_class:
-						if prob >= float(thresh):
-							ranked_dict[str(class_name)+'_'+str(tile_entry['x'])+'_'+str(tile_entry['y'])] = {class_name+'_probability': prob, 'x': tile_entry['x'], 'y': tile_entry['y'], 'width': tile_entry['width']}
-
-			if len(ranked_dict) == 0:
+			
+			if len(positive) == 0:
 				print(f'No annotations found at current threshold for {slide_name}')
 			else:
 				if args.xml:
@@ -324,17 +313,17 @@ if __name__ == '__main__':
 						xml_tail = 	f"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="{ranked_class}" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
 
 						xml_annotations = ""
-						for key, tile_info in sorted(ranked_dict.items(), reverse=True):
+						for index, row in positive.iterrows():
 							xml_annotations = (xml_annotations +
-												"\t\t<Annotation Name=\""+str(tile_info[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
+												"\t\t<Annotation Name=\""+str(row[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
 												"\t\t\t<Coordinates>\n" +
-												"\t\t\t\t<Coordinate Order=\"0\" X=\""+str(tile_info['x'])+"\" Y=\""+str(tile_info['y'])+"\" />\n" +
-												"\t\t\t\t<Coordinate Order=\"1\" X=\""+str(tile_info['x']+tile_info['width'])+"\" Y=\""+str(tile_info['y'])+"\" />\n" +
-												"\t\t\t\t<Coordinate Order=\"2\" X=\""+str(tile_info['x']+tile_info['width'])+"\" Y=\""+str(tile_info['y']+tile_info['width'])+"\" />\n" +
-												"\t\t\t\t<Coordinate Order=\"3\" X=\""+str(tile_info['x'])+"\" Y=\""+str(tile_info['y']+tile_info['width'])+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"0\" X=\""+str(row['x'])+"\" Y=\""+str(row['y'])+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"1\" X=\""+str(row['x']+tile_size)+"\" Y=\""+str(row['y'])+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"2\" X=\""+str(row['x']+tile_size)+"\" Y=\""+str(row['y']+tile_size)+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"3\" X=\""+str(row['x'])+"\" Y=\""+str(row['y']+tile_size)+"\" />\n" +
 												"\t\t\t</Coordinates>\n" +
 												"\t\t</Annotation>\n")
-						print('Creating automated annotation file for '+slide_name)
+						print('Creating automated annotation file for '+ slide_name)
 						with open(xml_path, "w") as annotation_file:
 							annotation_file.write(xml_header + xml_annotations + xml_tail)
 					else:
@@ -344,14 +333,10 @@ if __name__ == '__main__':
 					json_path = os.path.join(annotation_path, slide_name+'_inference.geojson')
 					if not os.path.exists(json_path):
 						json_annotations = {"type": "FeatureCollection", "features":[]}
-						for key, tile_info in sorted(ranked_dict.items(), reverse=True):
-							if ranked_class in key:
-								color = [0, 0, 255]
-								status = str(ranked_class)
-							else:
-								color = [0, 0, 0]
-								status = str(key)
-							
+						for index, row in positive.iterrows():
+							color = [0, 0, 255]
+							status = str(ranked_class)
+
 							json_annotations['features'].append({
 								"type": "Feature",
 								"id": "PathDetectionObject",
@@ -359,17 +344,17 @@ if __name__ == '__main__':
 								"type": "Polygon",
 								"coordinates": [
 										[
-											[tile_info['x'], tile_info['y']],
-											[tile_info['x']+tile_info['width'], tile_info['y']],
-											[tile_info['x']+tile_info['width'], tile_info['y']+tile_info['width']],
-											[tile_info['x'], tile_info['y']+tile_info['width']],		
-											[tile_info['x'], tile_info['y']]
+											[row['x'], row['y']],
+											[row['x']+tile_size, row['y']],
+											[row['x']+tile_size, row['y']+tile_size],
+											[row['x'], row['y']+tile_size],		
+											[row['x'], row['y']]
 										]	
 									]
 								},
 								"properties": {
 									"objectType": "annotation",
-									"name": str(status)+'_'+str(round(tile_info[status+'_probability'], 4))+'_'+str(tile_info['x']) +'_'+str(tile_info['y']),
+									"name": str(status)+'_'+str(round(row[ranked_class], 4))+'_'+str(row['x']) +'_'+str(row['y']),
 									"classification": {
 										"name": status,
 										"color": color
@@ -381,28 +366,18 @@ if __name__ == '__main__':
 							geojson.dump(json_annotations, annotation_file, indent=0)
 					else:
 						print(f'Automated geojson annotation file for {index} already exists')
-
-		if args.vis:
-			slide_im = slide_image(slidl_slide, stain, classes)
-			im_path = os.path.join(args.output, 'images')
-			if not os.path.exists(im_path):
-				os.makedirs(im_path)
-			slide_im.plot_thumbnail(case_id=index, target=ranked_class)
-			if args.thumbnail:
-				slide_im.save(im_path, slide_name+"_thumbnail")
-			slide_im.draw_class(target = ranked_class)
-			slide_im.plot_class(target = ranked_class)
-			slide_im.save(im_path, slide_name+"_"+ ranked_class)
-			plt.show()
-			plt.close('all')
-
-	df = pd.DataFrame.from_dict(data_list)
+	
+	if args.csv:
+		df = pd.DataFrame.from_dict(data_list)
+		df.to_csv(csv_path, index=False)
 
 	if args.stats:
+		df = pd.DataFrame.from_dict(data_list)
+
 		gt_col = df['Ground Truth Label']
 		gt = gt_col.tolist()
 
-		pred_col = df[ranked_class+ ' Tiles']
+		pred_col = df[ranked_class]
 		print(f'\nLCP Tile Threshold ({lcp_threshold})')
 		df['LCP'] = pred_col.gt(int(lcp_threshold)).astype(int)
 		pred = df[f'LCP'].tolist()
@@ -461,5 +436,5 @@ if __name__ == '__main__':
 		df['Result'] = np.select(results, values)
 		print('Predictions: \n', df['Result'].value_counts())
 
-	if args.csv:
-		df.to_csv(csv_path, index=False)
+		if args.csv:
+			df.to_csv(csv_path, index=False)
