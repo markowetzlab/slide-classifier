@@ -153,7 +153,6 @@ else:
     # msg = model.load_state_dict(state_dict, strict=False)
 
     state_dict = torch.load('/home/prew01/repos/slide-classifier/models/trained_models/vit-l-16/he/he_vit_l_16.pt')
-    import ipdb; ipdb.set_trace()
     model = models.vit_l_16(pretrained=False)
     model.load_state_dict(torch.load('/home/prew01/repos/slide-classifier/models/trained_models/vit-l-16/he/he_vit_l_16.pt').state_dict())
     # print('Pretrained weights found at {}\nLoaded with msg: {}'.format(pretrained_weights, msg))

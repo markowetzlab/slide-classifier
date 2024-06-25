@@ -1,49 +1,59 @@
 # This file runs tile-level inference on the training, calibration and internal validation cohort
-
 import argparse
 import os
 import time
+import h5py
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import geojson
 from tqdm import tqdm
-
 import torch
 import torch.nn as nn
-from slidl.slide import Slide
+
+from monai.data import DataLoader, CSVDataset, PatchWSIDataset
+import monai.transforms as mt
 
 from dataset_processing import class_parser
-from dataset_processing.image import channel_averages, image_transforms
 from models import get_network
-from utils.visualisation.display_slide import slide_image
-from utils.metrics.threshold import precision_recall_plots, auc_thresh_plot, roc_thresh_plot, auprc_curve_plot, auprc_thresh_plot
-from slidl.utils.torch.WholeSlideImageDataset import WholeSlideImageDataset
-
-from sklearn.metrics import (average_precision_score, f1_score, precision_recall_curve, precision_score,
-							 recall_score, roc_auc_score, roc_curve)
+from wsi_core.WholeSlideImage import WholeSlideImage
+from wsi_core.wsi_utils import StitchCoords
 
 import warnings
-warnings.filterwarnings('always')
+warnings.filterwarnings('ignore')
 
 def parse_args():
 	parser = argparse.ArgumentParser(description='Run inference on slides.')
 
+	parser.add_argument("--save_dir", default='results', help="path to folder where inference will be stored")
+
 	#dataset processing
-	parser.add_argument("--dataset", default='delta', help="Flag to switch between datasets. Currently supported: 'best'/'delta'")
-	parser.add_argument("--stain", choices=['he', 'p53'], required=True, help="he or p53")
-	parser.add_argument("--labels", help="file containing slide-level ground truth to use.'")
+	parser.add_argument("--stain", choices=['he', 'qc', 'p53', 'tff3'], help="Stain to consider H&E (he), quality control (qc) or P53 (p53), TFF3(tff3)")
+	parser.add_argument("--process_list", default=None, help="file containing slide-level ground truth to use.")
+	parser.add_argument("--slide_path", default='slides', help="slides root folder")
+	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
+	parser.add_argument("--reader", default='openslide', help="monai slide backend reader ('openslide' or 'cuCIM')")
 
 	#model path and parameters
-	parser.add_argument("--network", required=True, help="which CNN architecture to use")
+	parser.add_argument("--network", default='vgg_16', help="DL architecture to use")
 	parser.add_argument("--model_path", required=True, help="path to stored model weights")
 
-	#slide paths and tile properties
-	parser.add_argument("--slide_path", required=True, help="slides root folder")
-	parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
-	parser.add_argument("--tile_size", default=400, help="architecture tile size")
-	parser.add_argument("--overlap", default=0, help="what fraction of the tile edge neighboring tiles should overlap horizontally and vertically (default is 0)")
-	parser.add_argument("--foreground_only", action='store_true', help="Foreground with tissue only")
+	parser.add_argument("--patch_path", default='patches', help="path to stored patch files")
+	parser.add_argument("--patch_size", default=400, type=int, help="size of patches to extract")
+	parser.add_argument("--patch_level", default=0, type=int, help="level to extract patches from")
+	parser.add_argument("--input_size", default=None, type=int, help="size of tiles to extract")
+
+	#data processing
+	parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.")
+	parser.add_argument("--num_workers", type=int, default=8, help="Number of workers to call for DataLoader")
 	
+	parser.add_argument("--he_threshold", default=0.99993, type=float, help="A threshold for detecting gastric cardia in H&E")
+	parser.add_argument("--p53_threshold", default= 0.99, type=float, help="A threshold for Goblet cell detection in p53")
+	parser.add_argument("--qc_threshold", default=0.99, help="A threshold for detecting gastric cardia in H&E")
+	parser.add_argument("--tff3_threshold", default= 0.93, help="A threshold for Goblet cell detection in tff3")
+	parser.add_argument("--lcp_cutoff", default=None, help='number of tiles to be considered low confidence positive')
+	parser.add_argument("--hcp_cutoff", default=None, help='number of tiles to be considered high confidence positive')
+	parser.add_argument("--impute", action='store_true', help="Assume missing data as negative")
+
 	#class variables
 	parser.add_argument("--dysplasia_separate", action='store_false', help="Flag whether to separate the atypia of uncertain significance and dysplasia classes")
 	parser.add_argument("--respiratory_separate", action='store_false', help="Flag whether to separate the respiratory mucosa cilia and respiratory mucosa classes")
@@ -51,286 +61,342 @@ def parse_args():
 	parser.add_argument("--atypia_separate", action='store_false', help="Flag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other")
 	parser.add_argument("--p53_separate", action='store_false', help="Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar")
 
-	#data processing
-	parser.add_argument("--channel_norms", default='channel_means_and_stds.pickle', help='Path to channel norms pickle file')
-	parser.add_argument("--channel_means", default=[0.7747305964175918, 0.7421753839460998, 0.7307385516144509], help="0-1 normalized color channel means for all tiles on dataset separated by commas, e.g. 0.485,0.456,0.406 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
-	parser.add_argument("--channel_stds", default=[0.2105364799974944, 0.2123423033814637, 0.20617556948731974], help="0-1 normalized color channel standard deviations for all tiles on dataset separated by commas, e.g. 0.229,0.224,0.225 for RGB, respectively. Otherwise, provide a path to a 'channel_means_and_stds.pickle' file")
-	parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.")
-	parser.add_argument("--num_workers", type=int, default=8, help="Number of workers to call for DataLoader")
+	parser.add_argument("--ranked_class", default=None, help='particular class to rank tiles by')
 	
 	#outputs
-	parser.add_argument("--output", default='results', help="path to folder where inference maps will be stored")
-	parser.add_argument("--csv", action='store_true', help="Generate csv output file")
-	parser.add_argument("--vis", action='store_true', help="Display WSI after each slide")
-	parser.add_argument("--thumbnail", action='store_true', help="Save thumbnail of WSI for analysis (vis must also be true)")
-	parser.add_argument('--stats', action='store_true', help='produce precision-recall plot')
+	parser.add_argument("--xml", action='store_true', help='produce annotation files for ASAP in .xml format')
+	parser.add_argument("--json", action='store_true', help='produce annotation files for QuPath in .geoJSON format')
 
 	parser.add_argument('--silent', action='store_true', help='Flag which silences terminal outputs')
 
 	args = parser.parse_args()
 	return args
 
+def torchmodify(name):
+	a = name.split('.')
+	for i,s in enumerate(a) :
+		if s.isnumeric() :
+			a[i]="_modules['"+s+"']"
+	return '.'.join(a)
+
 if __name__ == '__main__':
 	args = parse_args()
 	
+	inference_dir = os.path.join(args.save_dir, 'inference')
+	if not os.path.exists(inference_dir):
+		os.makedirs(inference_dir, exist_ok=True)
+
+	directories = {'source': args.slide_path, 
+				   'save_dir': args.save_dir,
+				   'patch_dir': args.patch_path, 
+				   'inference_dir': inference_dir}
+
+	if not args.silent:
+		print("Outputting inference to: ", directories['save_dir'])
+
 	slide_path = args.slide_path
-	tile_size = args.tile_size
+	patch_size = args.patch_size
 	network = args.network
-	stain = args.stain
-	output_path = args.output
+	reader = args.reader
 
-	if stain == 'he':
-		ranked_class = 'atypia'
-		ranked_label = 'Atypia'
+	if args.stain == 'he':
 		file_name = 'H&E'
-	elif stain == 'p53':
-		ranked_class = 'aberrant_positive_columnar'
-		ranked_label = 'P53 positive'
+		gt_label = 'Atypia'
+		classes = class_parser('he', args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
+		if args.ranked_class is not None:
+			ranked_class = args.ranked_class
+		else:
+			ranked_class = 'atypia'
+		thresh = args.he_threshold
+		mapping = {'Y': 1, 'N': 0}
+		if args.lcp_cutoff is not None:
+			lcp_threshold = args.lcp_cutoff
+		else:
+			lcp_threshold = 0 
+		if args.hcp_cutoff is not None:
+			hcp_threshold = args.hcp_cutoff
+		else:
+			hcp_threshold = 10
+		channel_means = [0.7747305964175918, 0.7421753839460998, 0.7307385516144509]
+		channel_stds = [0.2105364799974944, 0.2123423033814637, 0.20617556948731974]
+	elif args.stain == 'qc':
+		file_name = 'H&E'
+		gt_label = 'QC Report'
+		classes = class_parser('he', args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
+		mapping = {'Adequate for pathological review': 1, 'Scant columnar cells': 1, 'Squamous cells only': 0, 'Insufficient cellular material': 0, 'Food material': 0}
+		if args.ranked_class is not None:
+			ranked_class = args.ranked_class
+		else:
+			ranked_class = 'gastric_cardia'
+		thresh = args.he_threshold
+		if args.lcp_cutoff is not None:
+			lcp_threshold = args.lcp_cutoff
+		else:
+			lcp_threshold = 0
+		if args.hcp_cutoff is not None:
+			hcp_threshold = args.hcp_cutoff
+		else:
+			hcp_threshold = 95
+		channel_means = [0.485, 0.456, 0.406]
+		channel_stds = [0.229, 0.224, 0.225]
+	elif args.stain == 'p53':
 		file_name = 'P53'
+		gt_label = 'P53 positive'
+		classes = class_parser('p53', args.p53_separate)
+		if args.ranked_class is not None:
+			ranked_class = args.ranked_class
+		else:
+			ranked_class = 'aberrant_positive_columnar'
+		thresh = args.p53_threshold
+		mapping = {'Y': 1, 'N': 0}
+		if args.lcp_cutoff is not None:
+			lcp_threshold = args.lcp_cutoff
+		else:
+			lcp_threshold = 0
+		if args.hcp_cutoff is not None:
+			hcp_threshold = args.hcp_cutoff
+		else:
+			hcp_threshold = 2
+		channel_means = [0.7747305964175918, 0.7421753839460998, 0.7307385516144509]
+		channel_stds = [0.2105364799974944, 0.2123423033814637, 0.20617556948731974]
+	elif args.stain == 'tff3':
+		file_name = 'TFF3'
+		gt_label = 'TFF3 positive'
+		classes = ['Equivocal', 'Negative', 'Positive']
+		ranked_class = 'Positive'
+		secondary_class = 'Equivocal'
+		thresh = args.tff3_threshold
+		mapping = {'Y': 1, 'N': 0}
+		if args.lcp_cutoff is not None:
+			lcp_triage_threshold = args.lcp_cutoff
+		else:
+			lcp_triage_threshold = 3
+		if args.hcp_cutoff is not None:
+			hcp_triage_threshold = args.hcp_cutoff
+		else:
+			hcp_triage_threshold = 40
+		channel_means = [0.485, 0.456, 0.406]
+		channel_stds = [0.229, 0.224, 0.225]
 	else:
-		raise AssertionError('Stain currently must be he or p53.')
+		raise AssertionError('args.stain must be he/qc, tff3, or p53.')
 
-	classes = class_parser(stain, args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
-	trained_model, params = get_network(network, class_names=classes, pretrained=False)
+	if not args.silent:
+		print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
+
+	trained_model, model_params = get_network(network, class_names=classes, pretrained=False)
 	try:
-		trained_model.load_state_dict(torch.load(args.model_path))
+		trained_model.load_state_dict(torch.load(args.model_path).module.state_dict())
 	except: 
 		trained_model = torch.load(args.model_path)
 	
+	# Modify the model to use the updated GELU activation function in later PyTorch versions 
+	for name, module in trained_model.named_modules():
+		if isinstance(module, nn.GELU):
+			exec('trained_model.'+torchmodify(name)+'=nn.GELU()')
+
+	# if args.multi_gpu:
+		# trained_model = torch.nn.parallel.DistributedDataParallel(trained_model, device_ids=[args.local_rank], output_device=args.local_rank)
+
 	# Use manual batch size if one has been specified
 	if args.batch_size is not None:
 		batch_size = args.batch_size
 	else:
-		batch_size = params['batch_size']
-	patch_size = params['patch_size']
+		batch_size = model_params['batch_size']
+	
+	if args.patch_size is not None:
+		patch_size = args.patch_size
+	else:
+		patch_size = model_params['patch_size']
 
-	if torch.cuda.is_available() and torch.version.hip:
-		device = torch.device("cuda:0")
-	elif torch.cuda.is_available() and torch.version.cuda:
-		device = torch.device("cuda:0")
+	if args.input_size is not None:
+		input_size = args.patch_size
+	else:
+		input_size = model_params['patch_size']
+
+	if torch.cuda.is_available() and (torch.version.hip or torch.version.cuda):
+		device = torch.device("cuda")
 	else:
 		device = torch.device("cpu")
-
-	if torch.cuda.device_count() > 1:
-		print("Let's use", torch.cuda.device_count(), "GPUs!")
-		trained_model = nn.DataParallel(trained_model)
 
 	trained_model.to(device)
 	trained_model.eval()
 
-	prob_thresh = np.append(np.arange(0, 0.9, 0.1), np.arange(0.91, 0.99, 0.01))
-	prob_thresh = np.append(prob_thresh, np.arange(0.999, 0.9999, 0.0001))
-	prob_thresh = np.round(prob_thresh, 7)
+	eval_transforms = mt.Compose(
+			[
+				mt.Resized(keys="image", spatial_size=(input_size, input_size)),
+				mt.ScaleIntensityRanged(keys="image", a_min=0, a_max=255, b_min=0.0, b_max=1.0),
+				mt.ToTensord(keys=("image")),
+				mt.TorchVisiond(keys=("image"), name="Normalize", mean=channel_means, std=channel_stds),
+				mt.ToMetaTensord(keys=("image")),
+			]
+		)
 
-	if not os.path.exists(output_path):
-		os.makedirs(output_path, exist_ok=True)
-	print("Outputting inference to: ", output_path)
-
-	csv_path = os.path.join(output_path, network + '-' + stain + '-prediction-data.csv')
-
-	if args.channel_means and args.channel_stds:
-		channel_means = args.channel_means
-		channel_stds = args.channel_stds
+	if args.process_list is not None:
+		if os.path.isfile(args.process_list):
+			#TODO read labels from csv to build process list
+			process_list = pd.read_csv(args.process_list, index_col=0)
+			process_list.dropna(subset=[file_name], inplace=True)
+			if args.impute:
+				process_list[gt_label] = process_list[gt_label].fillna('N')
+			else:
+				process_list.dropna(subset=[gt_label], inplace=True)
+			process_list.sort_index(inplace=True)
+			process_list[gt_label] = process_list[gt_label].map(mapping)
+		else:
+			raise AssertionError('Not a valid path for ground truth labels.')
 	else:
-		channel_norm = args.model_path.replace(args.model_path.split('/')[-1], args.channel_norms)
-		channel_means, channel_stds = channel_averages(channel_norm)
-	if not args.silent:
-		print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
-	data_transforms = image_transforms(channel_means, channel_stds, patch_size)['val']
-
-	if os.path.isfile(args.labels):
-		labels = pd.read_csv(args.labels, index_col=0)
-		labels[ranked_label] = labels[ranked_label].fillna('N')
-		labels.sort_index(inplace=True)
-		if not args.dataset == 'best':
-			labels[ranked_label] = labels[ranked_label].map(dict(Y=1, N=0))
-	else:
-		raise AssertionError('Not a valid path for ground truth labels.')
+		process_list = []
+		for file in os.listdir(slide_path):
+			if file.endswith(('.ndpi','.svs')):
+				process_list.append(file)
+		slides = sorted(process_list)
+		process_list = pd.DataFrame(slides, columns=['slide_id'])
+		process_list[gt_label] = 0
+		process_list
 
 	data_list = []
 
-	case_number = 0
-	for index, row in labels.iterrows():
-		case_file = row[file_name]
-		case_number += 1
+	for index, row in process_list.iterrows():
+		slide = row['slide_id']
+		slide_name = slide.replace(args.format, "")
 		try:
-			case_path = os.path.join(slide_path, case_file)
+			wsi = os.path.join(slide_path, slide)
 		except:
-			print(f'File {file_name} not found.')
+			print(f'File {slide} not found.')
 			continue
 
-		if not os.path.exists(case_path):
-			print(f'File {case_path} not found.')
+		if not os.path.exists(wsi):
+			print(f'File {wsi} not found.')
 			continue
 		if not args.silent:
-			print(f'Processing case {case_number}/{len(labels)}: ', end='')
+			print(f'\rProcessing case {index}/{len(process_list)}: ', end='')
 
-		inference_output = os.path.join(output_path, 'inference')
-		if not os.path.exists(inference_output):
-			os.makedirs(inference_output)
-		slide_output = os.path.join(inference_output, case_file.replace(args.format, '_inference'))
-
-		if os.path.isfile(slide_output + '.pml'):
-			if not args.silent:
-				print(f"Case {index} already processed")
-			slidl_slide = Slide(slide_output + '.pml', newSlideFilePath=case_path)
+		slide_output = os.path.join(directories['inference_dir'], slide_name)
+		if os.path.isfile(slide_output + '.csv'):
+			print(f'Inference for {slide_name} already exists.')
+			tiles = pd.read_csv(slide_output+'.csv')
 		else:
-			slidl_slide = Slide(case_path).setTileProperties(tileSize=tile_size, tileOverlap=float(args.overlap))
+			patch_file = os.path.join(directories['patch_dir'], slide_name+'.h5')
 
-			if args.foreground_only:
-				slidl_slide.detectForeground(threshold=95)
+			locations = pd.DataFrame(np.array(h5py.File(patch_file)['coords']), columns=['x_min','y_min'])
+			locations['image'] = wsi
+			print('Number of tiles:',len(locations))
+			patch_locations = CSVDataset(locations,
+								col_groups={"image": "image", "location": ["y_min", "x_min"]},
+							)
 
-			dataset = WholeSlideImageDataset(slidl_slide, foregroundOnly=args.foreground_only, transform=data_transforms)
-
+			dataset = PatchWSIDataset(
+				data=patch_locations,
+				patch_size=patch_size,
+				patch_level=args.patch_level,
+				include_label=False,
+				center_location=False,
+				transform = eval_transforms,
+				reader = reader
+			)
 			since = time.time()
-			dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+			dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
 			tile_predictions = []
-			
+
 			with torch.no_grad():
+				print(f'\rCase {index}/{len(process_list)} {index} processing: ')
 				for inputs in tqdm(dataloader, disable=args.silent):
-					inputTile = inputs['image'].to(device)
-					output = trained_model(inputTile)
+					tile = inputs['image'].to(device)
+					output = trained_model(tile)
 					output = output.to(device)
 
 					batch_prediction = torch.nn.functional.softmax(output, dim=1).cpu().data.numpy()
-
-					for index in range(len(inputTile)):
-						tileAddress = (inputs['tileAddress'][0][index].item(), inputs['tileAddress'][1][index].item())
+					for index in range(len(tile)):
 						preds = batch_prediction[index, ...].tolist()
 						if len(preds) != len(classes):
-							raise ValueError('Model has '+str(len(preds))+' classes but only '+str(len(classes))+' class names were provided in the classes argument')
-						prediction = {}
+							raise ValueError('Model has '+str(len(preds))+' classes but '+str(len(classes))+' class names were provided in the classes argument')
+						tile_location = inputs['image'].meta['location'][index].numpy()
+						prediction = {'x': tile_location[1], 'y': tile_location[0]}
 						for i, pred in enumerate(preds):
 							prediction[classes[i]] = pred
-						slidl_slide.appendTag(tileAddress, 'classifierInferencePrediction', prediction)
-						tile_predictions.append(tileAddress)			
-				
-			slidl_slide.save(fileName = slide_output)
+						tile_predictions.append(prediction)
+
+			tiles = pd.DataFrame(tile_predictions)
+			tiles.to_csv(slide_output+'.csv', index=False)
+
 			time_elapsed = time.time() - since
 			if not args.silent:
 				print('Inference complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
 
-		target_accuracy = []
-		for threshold in prob_thresh:
-			tiles = 0
-			for tile_address, tile_entry in slidl_slide.tileDictionary.items():
-				if ranked_class not in tile_entry['classifierInferencePrediction']:
-					raise ValueError(ranked_class +' not in classifierInferencePrediction at tile '+str(tile_address))
-				if tile_entry['classifierInferencePrediction'][ranked_class] >= threshold:
-					tiles += 1
-			target_accuracy.append(tiles)
-
-		data = {'CYT ID': index, 'Case Path': case_file, 'Ground Truth Label': row[ranked_label]}
-
-		tile_cols = [ranked_class + ' > ' + str(prob) for prob in prob_thresh]
-		tile_data = dict(zip(tile_cols, [int(i) for i in target_accuracy]))
-		data.update(tile_data)
+		counts = (tiles[ranked_class] > thresh).sum()
+		data = {'CYT ID': index, 'Case Path': slide, str(ranked_class+' Tiles'): counts}
 		data_list.append(data)
-
-		if args.vis:
-			slide_im = slide_image(slidl_slide, stain, classes)
-			im_path = os.path.join(args.output, 'images')
-			if not os.path.exists(im_path):
-				os.makedirs(im_path)
-			slide_im.plot_thumbnail(case_id=index, target=ranked_class)
-			if args.thumbnail:
-				slide_im.save(im_path, case_file.replace(args.format, "_thumbnail"))
-			slide_im.draw_class(target = ranked_class)
-			slide_im.plot_class(target = ranked_class)
-			slide_im.save(im_path, case_file.replace(args.format, "_" + ranked_class))
-			# plt.show()
-			plt.close('all')
-
-	df = pd.DataFrame.from_dict(data_list)
-	if args.csv:
-		df.to_csv(csv_path, index_label='CYT ID')
-
-	if args.stats:
-		cutoff_prob = []
-		auprc_cutoff_prob = []
 	
-		cutoffs = {}
-		auc_probs = {}
-		auc_plotting = {}
-		auc_data = []
-		
-		auprc_cutoffs = {}
-		auprc_probs = {}
-		auprc_plotting = {} 
-		auprc_data = []
-		
-		fpr_data = []
-		tpr_data = []
-		
-		precision_data = []
-		recall_data = []
-	
-		binary_precision = []
-		binary_recall = []
-		binary_f1 = []
+		if args.xml or args.json:
+			positive = tiles[tiles[ranked_class] > thresh]
 
-		gt_col = df['Ground Truth Label']
-		gt = gt_col.tolist()
-
-		for thresh in tile_cols:
-			pred_col = df[thresh]
-
-			auc_data.append(roc_auc_score(gt_col, pred_col))
-			auprc_data.append(average_precision_score(gt_col, pred_col))
+			annotation_path = os.path.join(directories['save_dir'], 'tile_annotations')
+			os.makedirs(annotation_path, exist_ok=True)
 			
-			fpr, tpr, threshs = roc_curve(gt_col, pred_col)
-			precision, recall, thresholds = precision_recall_curve(gt_col, pred_col)
+			if len(positive) == 0:
+				print(f'No annotations found at current threshold for {slide_name}')
+			else:
+				if args.xml:
+					xml_path = os.path.join(annotation_path, slide_name+'_inference.xml')
+					if not os.path.exists(xml_path):
+						# Make ASAP file
+						xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
+						xml_tail =  f"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="{ranked_class}" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
+
+						xml_annotations = ""
+						for index, row in positive.iterrows():
+							xml_annotations = (xml_annotations +
+												"\t\t<Annotation Name=\""+str(row[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
+												"\t\t\t<Coordinates>\n" +
+												"\t\t\t\t<Coordinate Order=\"0\" X=\""+str(row['x'])+"\" Y=\""+str(row['y'])+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"1\" X=\""+str(row['x']+patch_size)+"\" Y=\""+str(row['y'])+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"2\" X=\""+str(row['x']+patch_size)+"\" Y=\""+str(row['y']+patch_size)+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"3\" X=\""+str(row['x'])+"\" Y=\""+str(row['y']+patch_size)+"\" />\n" +
+												"\t\t\t</Coordinates>\n" +
+												"\t\t</Annotation>\n")
+						print('Creating automated annotation file for '+ slide_name)
+						with open(xml_path, "w") as annotation_file:
+							annotation_file.write(xml_header + xml_annotations + xml_tail)
+					else:
+						print(f'Automated xml annotation file for {index} already exists.')
+
+				if args.json:
+					json_path = os.path.join(annotation_path, slide_name+'_inference.geojson')
+					if not os.path.exists(json_path):
+						json_annotations = {"type": "FeatureCollection", "features":[]}
+						for index, row in positive.iterrows():
+							color = [0, 0, 255]
+							status = str(ranked_class)
+
+							json_annotations['features'].append({
+								"type": "Feature",
+								"id": "PathDetectionObject",
+								"geometry": {
+								"type": "Polygon",
+								"coordinates": [
+										[
+											[row['x'], row['y']],
+											[row['x']+patch_size, row['y']],
+											[row['x']+patch_size, row['y']+patch_size],
+											[row['x'], row['y']+patch_size],        
+											[row['x'], row['y']]
+										]   
+									]
+								},
+								"properties": {
+									"objectType": "annotation",
+									"name": str(status)+'_'+str(round(row[ranked_class], 4))+'_'+str(row['x']) +'_'+str(row['y']),
+									"classification": {
+										"name": status,
+										"color": color
+									}
+								}
+							})
+						print('Creating automated annotation file for ' + slide_name)
+						with open(json_path, "w") as annotation_file:
+							geojson.dump(json_annotations, annotation_file, indent=0)
+					else:
+						print(f'Automated geojson annotation file for {index} already exists')
 	
-			fpr_data.append(fpr)
-			tpr_data.append(tpr)
-			precision_data.append(precision)
-			recall_data.append(recall)
-	
-			pred = (pred_col > 0).astype(int).tolist()
-	
-			binary_precision.append(precision_score(gt, pred))
-			binary_recall.append(recall_score(gt, pred))
-			binary_f1.append(f1_score(gt, pred))
-
-		thresh_prec_rec_df = pd.DataFrame(list(zip([str(p) for p in prob_thresh], binary_precision, binary_recall, binary_f1)), columns=['Thresh', 'Precision', 'Recall', 'F1'])
-		if args.csv:
-			thresh_prec_rec_df.to_csv(csv_path.replace('prediction-data', 'results'))
-
-		max_auc = max(auc_data)
-		max_auc_idx = auc_data.index(max_auc)
-		print('Upper Threshold: ' + str(prob_thresh[max_auc_idx]), 'AUC: ' + str(auc_data[max_auc_idx]))
-	
-		cutoff_prob.append(round(prob_thresh[max_auc_idx], 6))
-		cutoffs['tile_thresh'] = round(prob_thresh[max_auc_idx], 7)
-		auc_probs['prob'] = auc_data
-	
-		auc_plotting['fpr'] = fpr_data[max_auc_idx]
-		auc_plotting['tpr'] = tpr_data[max_auc_idx]
-		
-		max_auprc = max(auprc_data)
-		max_auprc_idx = auprc_data.index(max_auprc)
-		print('Lower Threshold: ' + str(prob_thresh[max_auprc_idx]), 'AUPRC: ' + str(auprc_data[max_auprc_idx]))
-		
-		auprc_cutoff_prob.append(round(prob_thresh[max_auprc_idx], 6))
-		auprc_cutoffs['tile_thresh'] = prob_thresh[max_auprc_idx]
-		auprc_probs['prob'] = auprc_data
-		auprc_plotting['precision'] = precision_data[max_auprc_idx]
-		auprc_plotting['recall'] = recall_data[max_auprc_idx]
-
-		pr_fig = precision_recall_plots(thresh_prec_rec_df, 0.999, 1)
-		pr_fig.savefig(os.path.join(output_path, 'pr_curve_' + stain.upper() + '.png'))
-
-		auc_fig = auc_thresh_plot(auc_probs, prob_thresh, stain, x_min=0.9)
-		auc_fig.savefig(os.path.join(output_path, 'auc_prob_threshold_' + stain.upper() + '.png'))
-
-		roc_fig = roc_thresh_plot(cutoffs, auc_probs, auc_plotting, stain)
-		roc_fig.savefig(os.path.join(output_path, 'roc_curve_' + stain.upper() + '.png'))
-
-		auprc_curve_fig = auprc_curve_plot(auprc_cutoffs, auprc_probs, auprc_plotting, stain)
-		auprc_curve_fig.savefig(os.path.join(output_path, 'auprc_curve_' + stain.upper() + '.png'))
-
-		auprc_thresh_fig = auprc_thresh_plot(auprc_probs, prob_thresh, stain)
-		auprc_thresh_fig.savefig(os.path.join(output_path, 'auprc_prob_threshold_' + stain.upper() + '.png'))
-
-	if args.vis:
-		plt.show()
+	df = pd.DataFrame.from_dict(data_list)
+	df.to_csv(os.path.join(directories['save_dir'], 'process_list.csv'), index=False)

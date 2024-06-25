@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pyvips as pv
 from slidl.slide import Slide
-from utils.visualisation.display_slide import slide_image
+from legacy.display_slide import slide_image
 
 from dataset_processing import class_parser
 

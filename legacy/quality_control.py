@@ -13,9 +13,9 @@ from tqdm import tqdm
 import torch
 from slidl.slide import Slide
 
-from dataset_processing.image import image_transforms
+from slidl.image import image_transforms
 from models import get_network
-from utils.visualisation.display_slide import slide_image
+from legacy.display_slide import slide_image
 from slidl.utils.torch.WholeSlideImageDataset import WholeSlideImageDataset
 
 from sklearn.metrics import (roc_auc_score, precision_score, recall_score, f1_score,

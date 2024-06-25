@@ -2,6 +2,6 @@
 /.vscode
 results
 slurm
-/models/trained_models/*
+slidl
+/models/
 data
-models/deep-tissue-detector_densenet_state-dict.pt
