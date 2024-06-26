@@ -212,7 +212,7 @@ class WholeSlideImage(object):
 
     def segmentTissue(self, based_on='hed', contrast=1, seg_level=0, ref_patch_size=512, exclude_ids=[], keep_ids=[],
                     kernel=(5,5), dilute=False, he_cutoff_percent=5, artifact_detection=True, invert=False,
-                    min_width=200, filter_params={'min_pixel_count':20, 'a_t':2, 'a_h': 1, 'max_n_holes':8, 'max_bboxes':2, 'max_dist':250}, **kwargs):
+                    min_width=200, filter_params={'min_pixel_count':20, 'a_t':2, 'a_h': 1, 'max_n_holes':8,'max_bboxes':2, 'max_dist':250}, **kwargs):
         
         def _filter_contours(contours, hierarchy, filter_params):
             """
@@ -262,10 +262,9 @@ class WholeSlideImage(object):
             return foreground_contours, hole_contours
         
         img = self.wsi.read_region((0,0), seg_level, self.level_dim[seg_level])
-
         if based_on == 'hed':
             mask, coverage = self.get_hed_mask(img, hed_contrast=contrast)
-            if (coverage < he_cutoff_percent) or (coverage == 100.0):
+            if (coverage < he_cutoff_percent) or (coverage == 90.0):
                 mask, _ = self.get_gray_mask(img)
         elif based_on == 'gray':
             mask, _ = self.get_gray_mask(img)
@@ -289,7 +288,7 @@ class WholeSlideImage(object):
             poly_coords = np.array([list(zip(x, y))], dtype=np.int32)
             # Fill the polygon area in the mask with 1
             cv2.fillPoly(polygon_mask, poly_coords, 1)
-            
+
         labeled_mask = label(polygon_mask)
 
         # get bounding box of the mask
@@ -895,14 +894,13 @@ class WholeSlideImage(object):
         contours_tissue = self.scaleContourDim(self.contours_tissue, scale)
         offset = tuple((np.array(offset) * np.array(scale) * -1).astype(np.int32))
 
-        # contours_holes = self.scaleHolesDim(self.holes_tissue, scale)
-        # contours_tissue, contours_holes = zip(*sorted(zip(contours_tissue, contours_holes), key=lambda x: cv2.contourArea(x[0]), reverse=True))
+        contours_holes = self.scaleHolesDim(self.holes_tissue, scale)
+        contours_tissue, contours_holes = zip(*sorted(zip(contours_tissue, contours_holes), key=lambda x: cv2.contourArea(x[0]), reverse=True))
         for idx in range(len(contours_tissue)):
             cv2.drawContours(image=tissue_mask, contours=contours_tissue, contourIdx=idx, color=(1), offset=offset, thickness=-1)
 
-            # if use_holes:
-                # cv2.drawContours(image=tissue_mask, contours=contours_holes[idx], contourIdx=-1, color=(0), offset=offset, thickness=-1)
-            # contours_holes = self._scaleContourDim(self.holes_tissue, scale, holes=True, area_thresh=area_thresh)
+            if use_holes:
+                cv2.drawContours(image=tissue_mask, contours=contours_holes[idx], contourIdx=-1, color=(0), offset=offset, thickness=-1)
                 
         tissue_mask = tissue_mask.astype(bool)
         print('detected {}/{} of region as tissue'.format(tissue_mask.sum(), tissue_mask.size))

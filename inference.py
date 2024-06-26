@@ -9,14 +9,13 @@ import geojson
 from tqdm import tqdm
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, DistributedSampler
 
 from monai.data import DataLoader, CSVDataset, PatchWSIDataset
 import monai.transforms as mt
 
 from dataset_processing import class_parser
 from models import get_network
-from wsi_core.WholeSlideImage import WholeSlideImage
-from wsi_core.wsi_utils import StitchCoords
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -37,13 +36,11 @@ def parse_args():
 	parser.add_argument("--network", default='vgg_16', help="DL architecture to use")
 	parser.add_argument("--model_path", required=True, help="path to stored model weights")
 
-	parser.add_argument("--patch_path", default='patches', help="path to stored patch files")
-	parser.add_argument("--patch_size", default=400, type=int, help="size of patches to extract")
-	parser.add_argument("--patch_level", default=0, type=int, help="level to extract patches from")
+	parser.add_argument("--patch_path", default='patches', help="path to stored (.h5 or .csv) patch files")
 	parser.add_argument("--input_size", default=None, type=int, help="size of tiles to extract")
 
 	#data processing
-	parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.")
+	parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.", type=int)
 	parser.add_argument("--num_workers", type=int, default=8, help="Number of workers to call for DataLoader")
 	
 	parser.add_argument("--he_threshold", default=0.99993, type=float, help="A threshold for detecting gastric cardia in H&E")
@@ -55,13 +52,12 @@ def parse_args():
 	parser.add_argument("--impute", action='store_true', help="Assume missing data as negative")
 
 	#class variables
+	parser.add_argument("--ranked_class", default=None, help='particular class to rank tiles by')
 	parser.add_argument("--dysplasia_separate", action='store_false', help="Flag whether to separate the atypia of uncertain significance and dysplasia classes")
 	parser.add_argument("--respiratory_separate", action='store_false', help="Flag whether to separate the respiratory mucosa cilia and respiratory mucosa classes")
 	parser.add_argument("--gastric_separate", action='store_false', help="Flag whether to separate the tickled up columnar and gastric cardia classes")
 	parser.add_argument("--atypia_separate", action='store_false', help="Flag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other")
 	parser.add_argument("--p53_separate", action='store_false', help="Flag whether to perform the following class split: aberrant_positive_columnar, artifact+nonspecific_background+oral_bacteria, ignore equivocal_columnar")
-
-	parser.add_argument("--ranked_class", default=None, help='particular class to rank tiles by')
 	
 	#outputs
 	parser.add_argument("--xml", action='store_true', help='produce annotation files for ASAP in .xml format')
@@ -82,22 +78,25 @@ def torchmodify(name):
 if __name__ == '__main__':
 	args = parse_args()
 	
+	network = args.network
+	reader = args.reader
+
 	inference_dir = os.path.join(args.save_dir, 'inference')
 	if not os.path.exists(inference_dir):
 		os.makedirs(inference_dir, exist_ok=True)
 
-	directories = {'source': args.slide_path, 
+	crf_dir = os.path.join(args.save_dir, 'crfs')
+	if not os.path.exists(crf_dir):
+		os.makedirs(crf_dir, exist_ok=True)
+
+	directories = {'slide_dir': args.slide_path, 
 				   'save_dir': args.save_dir,
 				   'patch_dir': args.patch_path, 
-				   'inference_dir': inference_dir}
+				   'inference_dir': inference_dir,
+				   'crf_dir': crf_dir}
 
 	if not args.silent:
 		print("Outputting inference to: ", directories['save_dir'])
-
-	slide_path = args.slide_path
-	patch_size = args.patch_size
-	network = args.network
-	reader = args.reader
 
 	if args.stain == 'he':
 		file_name = 'H&E'
@@ -194,20 +193,12 @@ if __name__ == '__main__':
 		if isinstance(module, nn.GELU):
 			exec('trained_model.'+torchmodify(name)+'=nn.GELU()')
 
-	# if args.multi_gpu:
-		# trained_model = torch.nn.parallel.DistributedDataParallel(trained_model, device_ids=[args.local_rank], output_device=args.local_rank)
-
 	# Use manual batch size if one has been specified
 	if args.batch_size is not None:
 		batch_size = args.batch_size
 	else:
 		batch_size = model_params['batch_size']
 	
-	if args.patch_size is not None:
-		patch_size = args.patch_size
-	else:
-		patch_size = model_params['patch_size']
-
 	if args.input_size is not None:
 		input_size = args.patch_size
 	else:
@@ -217,8 +208,11 @@ if __name__ == '__main__':
 		device = torch.device("cuda")
 	else:
 		device = torch.device("cpu")
-
-	trained_model.to(device)
+	
+	if torch.cuda.device_count() > 1:
+		trained_model = torch.nn.DataParallel(trained_model, device_ids=list(range(torch.cuda.device_count())))
+	else:
+		trained_model.to(device)
 	trained_model.eval()
 
 	eval_transforms = mt.Compose(
@@ -246,13 +240,12 @@ if __name__ == '__main__':
 			raise AssertionError('Not a valid path for ground truth labels.')
 	else:
 		process_list = []
-		for file in os.listdir(slide_path):
+		for file in os.listdir(directories['slide_dir']):
 			if file.endswith(('.ndpi','.svs')):
 				process_list.append(file)
 		slides = sorted(process_list)
 		process_list = pd.DataFrame(slides, columns=['slide_id'])
-		process_list[gt_label] = 0
-		process_list
+		process_list['CYT ID'] = process_list['slide_id'].str.split(' ').str[0]
 
 	data_list = []
 
@@ -260,7 +253,7 @@ if __name__ == '__main__':
 		slide = row['slide_id']
 		slide_name = slide.replace(args.format, "")
 		try:
-			wsi = os.path.join(slide_path, slide)
+			wsi = os.path.join(directories['slide_dir'], slide)
 		except:
 			print(f'File {slide} not found.')
 			continue
@@ -273,14 +266,18 @@ if __name__ == '__main__':
 
 		slide_output = os.path.join(directories['inference_dir'], slide_name)
 		if os.path.isfile(slide_output + '.csv'):
-			print(f'Inference for {slide_name} already exists.')
-			tiles = pd.read_csv(slide_output+'.csv')
+			print(f'Inference for {row["CYT ID"]} already exists.')
+			predictions = pd.read_csv(slide_output+'.csv')
 		else:
-			patch_file = os.path.join(directories['patch_dir'], slide_name+'.h5')
+			patch_path = os.path.join(directories['patch_dir'], slide_name+'.h5')
+			patch_file = h5py.File(patch_path)['coords']
+			patch_size = patch_file.attrs['patch_size']
+			patch_level = patch_file.attrs['patch_level']
 
-			locations = pd.DataFrame(np.array(h5py.File(patch_file)['coords']), columns=['x_min','y_min'])
+			locations = pd.DataFrame(np.array(patch_file), columns=['x_min','y_min'])
 			locations['image'] = wsi
 			print('Number of tiles:',len(locations))
+			#monai coordinates are trasposed
 			patch_locations = CSVDataset(locations,
 								col_groups={"image": "image", "location": ["y_min", "x_min"]},
 							)
@@ -288,47 +285,74 @@ if __name__ == '__main__':
 			dataset = PatchWSIDataset(
 				data=patch_locations,
 				patch_size=patch_size,
-				patch_level=args.patch_level,
+				patch_level=patch_level,
 				include_label=False,
 				center_location=False,
 				transform = eval_transforms,
 				reader = reader
 			)
-			since = time.time()
+
 			dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
 			tile_predictions = []
 
+			since = time.time()
+
 			with torch.no_grad():
-				print(f'\rCase {index}/{len(process_list)} {index} processing: ')
+				print(f'\rCase {index}/{len(process_list)} {row["CYT ID"]} processing: ')
 				for inputs in tqdm(dataloader, disable=args.silent):
 					tile = inputs['image'].to(device)
+					tile_location = inputs['image'].meta['location'].numpy()
+					
 					output = trained_model(tile)
-					output = output.to(device)
 
 					batch_prediction = torch.nn.functional.softmax(output, dim=1).cpu().data.numpy()
-					for index in range(len(tile)):
-						preds = batch_prediction[index, ...].tolist()
-						if len(preds) != len(classes):
-							raise ValueError('Model has '+str(len(preds))+' classes but '+str(len(classes))+' class names were provided in the classes argument')
-						tile_location = inputs['image'].meta['location'][index].numpy()
-						prediction = {'x': tile_location[1], 'y': tile_location[0]}
-						for i, pred in enumerate(preds):
-							prediction[classes[i]] = pred
-						tile_predictions.append(prediction)
+					predictions = np.concatenate((tile_location, batch_prediction), axis=1)
+					for i in range(len(predictions)):
+						tile_predictions.append(predictions[i])
 
-			tiles = pd.DataFrame(tile_predictions)
-			tiles.to_csv(slide_output+'.csv', index=False)
+			columns = ['y_min', 'x_min'] + classes
+			predictions = pd.DataFrame(tile_predictions, columns=columns)
+			predictions['x_min'] = predictions['x_min'].astype(int)
+			predictions['y_min'] = predictions['y_min'].astype(int)
+			predictions['x_max'] = predictions['x_min'] + patch_size
+			predictions['y_max'] = predictions['y_min'] + patch_size
+			predictions = predictions.reindex(columns=['x_min', 'y_min', 'x_max', 'y_max'] + classes)
+			predictions.to_csv(slide_output+'.csv', index=False)
 
 			time_elapsed = time.time() - since
 			if not args.silent:
 				print('Inference complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
 
-		counts = (tiles[ranked_class] > thresh).sum()
-		data = {'CYT ID': index, 'Case Path': slide, str(ranked_class+' Tiles'): counts}
+		positive_tiles = (predictions[ranked_class] > thresh).sum()
+		if positive_tiles >= hcp_threshold:
+			algorithm_result = 'High Confidence Positive'
+		elif positive_tiles >= lcp_threshold:
+			algorithm_result = 'Low Confidence Positive'
+		else:
+			algorithm_result = 'Negative'
+
+		#FOR BEST4 REDCAP
+		crf = {'record_id': row['CYT ID'], 
+				'redcap_event_name': 'unscheduled_arm_1', 
+				'redcap_repeat_instrument': 'machine_learning_pathology_results', 
+				'redcap_repeat_instance': '0', 
+				'redcap_data_access_group': None, 
+				'algorithm_cyted_sample_id': row['CYT ID'], 
+				'slide_filename': slide_name,
+				'positive_tiles': positive_tiles,
+				'algorithm_result': algorithm_result, 
+				'algorithm_version': f'v1_{args.model_path.split("/")[-1]}', 
+				'machine_learning_pathology_results_complete': 'yes'
+				}
+		crf = pd.DataFrame([crf])
+		crf_path = os.path.join(directories['crf_dir'], slide_name + '_' + args.stain +'.csv')
+		crf.to_csv(crf_path, index=False)
+
+		data = {'CYT ID': row['CYT ID'], 'Case Path': slide, str(ranked_class+' Tiles'): positive_tiles}
 		data_list.append(data)
 	
 		if args.xml or args.json:
-			positive = tiles[tiles[ranked_class] > thresh]
+			positive = predictions[predictions[ranked_class] > thresh]
 
 			annotation_path = os.path.join(directories['save_dir'], 'tile_annotations')
 			os.makedirs(annotation_path, exist_ok=True)
@@ -348,10 +372,10 @@ if __name__ == '__main__':
 							xml_annotations = (xml_annotations +
 												"\t\t<Annotation Name=\""+str(row[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
 												"\t\t\t<Coordinates>\n" +
-												"\t\t\t\t<Coordinate Order=\"0\" X=\""+str(row['x'])+"\" Y=\""+str(row['y'])+"\" />\n" +
-												"\t\t\t\t<Coordinate Order=\"1\" X=\""+str(row['x']+patch_size)+"\" Y=\""+str(row['y'])+"\" />\n" +
-												"\t\t\t\t<Coordinate Order=\"2\" X=\""+str(row['x']+patch_size)+"\" Y=\""+str(row['y']+patch_size)+"\" />\n" +
-												"\t\t\t\t<Coordinate Order=\"3\" X=\""+str(row['x'])+"\" Y=\""+str(row['y']+patch_size)+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"0\" X=\""+str(row['x_min'])+"\" Y=\""+str(row['y_min'])+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"1\" X=\""+str(row['x_max'])+"\" Y=\""+str(row['y_min'])+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"2\" X=\""+str(row['x_max'])+"\" Y=\""+str(row['y_max'])+"\" />\n" +
+												"\t\t\t\t<Coordinate Order=\"3\" X=\""+str(row['x_min'])+"\" Y=\""+str(row['y_max'])+"\" />\n" +
 												"\t\t\t</Coordinates>\n" +
 												"\t\t</Annotation>\n")
 						print('Creating automated annotation file for '+ slide_name)
@@ -375,17 +399,17 @@ if __name__ == '__main__':
 								"type": "Polygon",
 								"coordinates": [
 										[
-											[row['x'], row['y']],
-											[row['x']+patch_size, row['y']],
-											[row['x']+patch_size, row['y']+patch_size],
-											[row['x'], row['y']+patch_size],        
-											[row['x'], row['y']]
+											[row['x_min'], row['y_min']],
+											[row['x_max'], row['y_min']],
+											[row['x_max'], row['y_max']],
+											[row['x_min'], row['y_max']],        
+											[row['x_min'], row['y_min']]
 										]   
 									]
 								},
 								"properties": {
 									"objectType": "annotation",
-									"name": str(status)+'_'+str(round(row[ranked_class], 4))+'_'+str(row['x']) +'_'+str(row['y']),
+									"name": str(status)+'_'+str(round(row[ranked_class], 4))+'_'+str(row['x_min']) +'_'+str(row['y_min']),
 									"classification": {
 										"name": status,
 										"color": color
@@ -396,7 +420,10 @@ if __name__ == '__main__':
 						with open(json_path, "w") as annotation_file:
 							geojson.dump(json_annotations, annotation_file, indent=0)
 					else:
-						print(f'Automated geojson annotation file for {index} already exists')
+						print(f'Automated geojson annotation file for {row["CYT ID"]} already exists')
 	
 	df = pd.DataFrame.from_dict(data_list)
 	df.to_csv(os.path.join(directories['save_dir'], 'process_list.csv'), index=False)
+	print(f'Number of HCP slides: {(df[ranked_class] >= hcp_threshold).sum()}')
+	print(f'Number of LCP slides: {(df[ranked_class] >= lcp_threshold).sum()}')
+	print(f'Number of Negative slides: {(df[ranked_class] < lcp_threshold).sum()}')

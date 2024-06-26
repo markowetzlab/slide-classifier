@@ -47,7 +47,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 				  patch_size = 256, step_size = 256, 
 				  seg_params = {'seg_level': -1, 'sthresh': 8, 'mthresh': 7, 'close': 4, 'use_otsu': False,
 				  'keep_ids': 'none', 'exclude_ids': 'none', 'based_on': 'hed'},
-				  filter_params = {'min_pixel_count':20, 'a_t':100, 'a_h': 16, 'max_n_holes':8, 'max_bboxes':2, 'max_dist':250}, 
+				  filter_params = {'min_pixel_count':25, 'a_t':100, 'a_h': 16, 'max_n_holes':8, 'max_bboxes':2, 'max_dist':200}, 
 				  vis_params = {'vis_level': -1, 'line_thickness': 500},
 				  patch_params = {'use_padding': True, 'contour_fn': 'four_pt'},
 				  patch_level = 0,
@@ -230,6 +230,7 @@ parser.add_argument('--patch_size', type = int, default=256,
 					help='patch_size')
 parser.add_argument('--patch', default=False, action='store_true')
 parser.add_argument('--seg', default=False, action='store_true')
+parser.add_argument('--base', default='hed', type=str, help='segmentation based on colour space (hed, gray)}')
 parser.add_argument('--stitch', default=False, action='store_true')
 parser.add_argument('--no_auto_skip', default=True, action='store_false')
 parser.add_argument('--save_dir', type = str,
@@ -270,9 +271,8 @@ if __name__ == '__main__':
 		if key not in ['source']:
 			os.makedirs(val, exist_ok=True)
 
-	seg_params = {'seg_level': -1, 'sthresh': 8, 'mthresh': 7, 'close': 4, 'use_otsu': False,
-				  'keep_ids': 'none', 'exclude_ids': 'none'}
-	filter_params = {'min_pixel_count':50, 'a_t':100, 'a_h': 1, 'max_n_holes':8, 'max_dist':250, 'max_bboxes':2}
+	seg_params = {'seg_level': -1, 'based_on': args.base, 'contrast': 1, 'keep_ids': 'none', 'exclude_ids': 'none'}
+	filter_params = {'min_pixel_count':25, 'a_t':10, 'a_h': 16, 'max_n_holes':2, 'max_dist':150, 'max_bboxes':2}
 	vis_params = {'vis_level': -1, 'line_thickness': 250}
 	patch_params = {'use_padding': True, 'contour_fn': 'four_pt'}
 
