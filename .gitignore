@@ -2,6 +2,6 @@
 /.vscode
 results
 slurm
-slidl
+legacy
 /models/
 data

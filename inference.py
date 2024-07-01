@@ -81,19 +81,21 @@ if __name__ == '__main__':
     network = args.network
     reader = args.reader
 
-    inference_dir = os.path.join(args.save_dir, 'inference')
-    if not os.path.exists(inference_dir):
-        os.makedirs(inference_dir, exist_ok=True)
-
     crf_dir = os.path.join(args.save_dir, 'crfs')
-    if not os.path.exists(crf_dir):
-        os.makedirs(crf_dir, exist_ok=True)
+    inference_dir = os.path.join(args.save_dir, 'inference')
+    annotation_dir = os.path.join(args.save_dir, 'tile_annotations')
 
     directories = {'slide_dir': args.slide_path, 
                    'save_dir': args.save_dir,
                    'patch_dir': args.patch_path, 
                    'inference_dir': inference_dir,
-                   'crf_dir': crf_dir}
+                   'crf_dir': crf_dir,
+                   'annotation_dir': annotation_dir
+                   }
+    
+    for path in directories.values():
+        if not os.path.exists(path):
+            os.makedirs(path, exist_ok=True)
 
     if not args.silent:
         print("Outputting inference to: ", directories['save_dir'])
@@ -245,10 +247,11 @@ if __name__ == '__main__':
                 process_list.append(file)
         slides = sorted(process_list)
         process_list = pd.DataFrame(slides, columns=['slide_id'])
-        process_list['CYT ID'] = process_list['slide_id'].str.split(' ').str[0]
-        #process_list['Pot ID'] = str[1]
+        sample_id = process_list['slide_id'].str.split(' ')
+        process_list['CYT ID'] = sample_id.str[0]
+        process_list['Pot ID'] = sample_id.str[2]
 
-    data_list = []
+    records = []
 
     for index, row in process_list.iterrows():
         slide = row['slide_id']
@@ -326,70 +329,50 @@ if __name__ == '__main__':
 
         positive_tiles = (predictions[ranked_class] > thresh).sum()
         if positive_tiles >= hcp_threshold:
-            algorithm_result = 'High Confidence Positive'
-        elif positive_tiles >= lcp_threshold:
-            algorithm_result = 'Low Confidence Positive'
+            algorithm_result = 3
+        elif (positive_tiles < hcp_threshold) & (positive_tiles > lcp_threshold):
+            algorithm_result = 2
         else:
-            algorithm_result = 'Negative'
+            algorithm_result = 1
 
-        #FOR BEST4 REDCAP
-        crf = {'record_id': row['CYT ID'], 
-                'redcap_event_name': 'unscheduled_arm_1', 
-                'redcap_repeat_instrument': 'machine_learning_pathology_results', 
-                'redcap_repeat_instance': '0', 
-                'redcap_data_access_group': None, 
-                'algorithm_cyted_sample_id': row['CYT ID'], 
-                'slide_filename': slide_name,
-                'positive_tiles': positive_tiles,
-                'algorithm_result': algorithm_result, 
-                'algorithm_version': f'v1_{args.model_path.split("/")[-1]}', 
-                'machine_learning_pathology_results_complete': 'yes'
-                }
-        crf = pd.DataFrame([crf])
-        crf_path = os.path.join(directories['crf_dir'], slide_name + '_' + args.stain +'.csv')
-        crf.to_csv(crf_path, index=False)
-
-        data = {'CYT ID': row['CYT ID'], 'Case Path': slide, str(ranked_class+' Tiles'): positive_tiles}
-        data_list.append(data)
-    
+        annotation_file = None
         if args.xml or args.json:
             positive = predictions[predictions[ranked_class] > thresh]
 
-            annotation_path = os.path.join(directories['save_dir'], 'tile_annotations')
-            os.makedirs(annotation_path, exist_ok=True)
-            
             if len(positive) == 0:
                 print(f'No annotations found at current threshold for {slide_name}')
             else:
                 if args.xml:
-                    xml_path = os.path.join(annotation_path, slide_name+'_inference.xml')
-                    if not os.path.exists(xml_path):
+                    annotation_file = slide_name+f'_{args.stain}'+'.xml'
+                    annotation_path = os.path.join(directories['annotation_dir'], annotation_file)
+                    if not os.path.exists(annotation_path):
                         # Make ASAP file
                         xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
                         xml_tail =  f"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="{ranked_class}" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
 
                         xml_annotations = ""
-                        for index, row in positive.iterrows():
+                        for index, tile in positive.iterrows():
                             xml_annotations = (xml_annotations +
-                                                "\t\t<Annotation Name=\""+str(row[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
+                                                "\t\t<Annotation Name=\""+str(tile[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
                                                 "\t\t\t<Coordinates>\n" +
-                                                "\t\t\t\t<Coordinate Order=\"0\" X=\""+str(row['x_min'])+"\" Y=\""+str(row['y_min'])+"\" />\n" +
-                                                "\t\t\t\t<Coordinate Order=\"1\" X=\""+str(row['x_max'])+"\" Y=\""+str(row['y_min'])+"\" />\n" +
-                                                "\t\t\t\t<Coordinate Order=\"2\" X=\""+str(row['x_max'])+"\" Y=\""+str(row['y_max'])+"\" />\n" +
-                                                "\t\t\t\t<Coordinate Order=\"3\" X=\""+str(row['x_min'])+"\" Y=\""+str(row['y_max'])+"\" />\n" +
+                                                "\t\t\t\t<Coordinate Order=\"0\" X=\""+str(tile['x_min'])+"\" Y=\""+str(tile['y_min'])+"\" />\n" +
+                                                "\t\t\t\t<Coordinate Order=\"1\" X=\""+str(tile['x_max'])+"\" Y=\""+str(tile['y_min'])+"\" />\n" +
+                                                "\t\t\t\t<Coordinate Order=\"2\" X=\""+str(tile['x_max'])+"\" Y=\""+str(tile['y_max'])+"\" />\n" +
+                                                "\t\t\t\t<Coordinate Order=\"3\" X=\""+str(tile['x_min'])+"\" Y=\""+str(tile['y_max'])+"\" />\n" +
                                                 "\t\t\t</Coordinates>\n" +
                                                 "\t\t</Annotation>\n")
                         print('Creating automated annotation file for '+ slide_name)
-                        with open(xml_path, "w") as annotation_file:
-                            annotation_file.write(xml_header + xml_annotations + xml_tail)
+                        with open(annotation_path, "w") as f:
+                            f.write(xml_header + xml_annotations + xml_tail)
                     else:
-                        print(f'Automated xml annotation file for {index} already exists.')
+                        print(f'Automated xml annotation file for {annotation_file} already exists.')
 
                 if args.json:
-                    json_path = os.path.join(annotation_path, slide_name+'_inference.geojson')
-                    if not os.path.exists(json_path):
+                    annotation_file = slide_name+f'_{args.stain}'+'.geojson'
+                    annotation_path = os.path.join(directories['annotation_dir'], annotation_file)
+                    if not os.path.exists(annotation_path):
                         json_annotations = {"type": "FeatureCollection", "features":[]}
-                        for index, row in positive.iterrows():
+                        for index, tile in positive.iterrows():
                             color = [0, 0, 255]
                             status = str(ranked_class)
 
@@ -400,17 +383,17 @@ if __name__ == '__main__':
                                 "type": "Polygon",
                                 "coordinates": [
                                         [
-                                            [row['x_min'], row['y_min']],
-                                            [row['x_max'], row['y_min']],
-                                            [row['x_max'], row['y_max']],
-                                            [row['x_min'], row['y_max']],        
-                                            [row['x_min'], row['y_min']]
+                                            [tile['x_min'], tile['y_min']],
+                                            [tile['x_max'], tile['y_min']],
+                                            [tile['x_max'], tile['y_max']],
+                                            [tile['x_min'], tile['y_max']],        
+                                            [tile['x_min'], tile['y_min']]
                                         ]   
                                     ]
                                 },
                                 "properties": {
                                     "objectType": "annotation",
-                                    "name": str(status)+'_'+str(round(row[ranked_class], 4))+'_'+str(row['x_min']) +'_'+str(row['y_min']),
+                                    "name": str(status)+'_'+str(round(tile[ranked_class], 4))+'_'+str(tile['x_min']) +'_'+str(tile['y_min']),
                                     "classification": {
                                         "name": status,
                                         "color": color
@@ -418,13 +401,29 @@ if __name__ == '__main__':
                                 }
                             })
                         print('Creating automated annotation file for ' + slide_name)
-                        with open(json_path, "w") as annotation_file:
-                            geojson.dump(json_annotations, annotation_file, indent=0)
+                        with open(annotation_path, "w") as f:
+                            geojson.dump(json_annotations, f, indent=0)
                     else:
-                        print(f'Automated geojson annotation file for {row["CYT ID"]} already exists')
-    
-    df = pd.DataFrame.from_dict(data_list)
+                        print(f'Automated geojson annotation file for {annotation_file} already exists')
+        
+        record = {
+            'algorithm_cyted_sample_id': row['CYT ID'], 
+            'pot id': row['Pot ID'],
+            'slide_filename': row['slide_id'],
+            'positive_tiles': positive_tiles,
+            'algorithm_result': algorithm_result,
+            'tile_mapping': annotation_file,
+            'algorithm_version': f'{args.model_path.split("/")[-1]}',
+            'redcap_repeat_instance': '0'
+        }
+        records.append(record)
+
+        crf = pd.DataFrame([record])
+        crf_path = os.path.join(directories['crf_dir'], slide_name + '_' + args.stain +'.csv')
+        crf.to_csv(crf_path, index=False)
+
+    df = pd.DataFrame.from_dict(records)
     df.to_csv(os.path.join(directories['save_dir'], 'process_list.csv'), index=False)
-    print(f'Number of HCP slides: {(df[str(ranked_class)+" Tiles"] >= hcp_threshold).sum()}')
-    print(f'Number of LCP slides: {(df[str(ranked_class)+" Tiles"] >= lcp_threshold).sum()}')
-    print(f'Number of Negative slides: {(df[str(ranked_class)+" Tiles"] < lcp_threshold).sum()}')
+    print(f'Number of HCP slides: {(df["algorithm_result"] == 3).sum()}')
+    print(f'Number of LCP slides: {(df["algorithm_result"] == 2).sum()}')
+    print(f'Number of Negative slides: {(df["algorithm_result"] == 1).sum()}')
