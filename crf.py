@@ -8,9 +8,7 @@ tff3_path = '/media/prew01/BEST/BEST4/surveillance/tff3/inference/process_list.c
 
 # Load the data
 qc = pd.read_csv(qc_path, index_col=0)
-
 #Remap Column Names
-# Example of a mapping dictionary - update this according to your needs
 qc_column_mapping = {
     'slide_filename': 'h_e_slide_filename',
     'positive_tiles': 'he_numb_gastric_tile_alg',
@@ -50,8 +48,14 @@ tff3_column_mapping = {
 }
 tff3 = tff3.rename(columns=tff3_column_mapping)
 
-# Step 1: Initialize an empty DataFrame
-appended_df = pd.DataFrame()
+# Step 1: Initialize DataFrame for mapping ids
+record_ids = pd.read_csv('/media/prew01/BEST/BEST4/BarrettsOESophagusTr-InformationForMachin_DATA_2024-07-01_1505.csv')
+record_ids = record_ids.dropna(subset=['cypath_lab_nmb'])
+record_ids['redcap_event_name'] = 'unscheduled_arm_1'
+record_ids['redcap_repeat_instrument'] = 'machine_learning_pathology_results'
+record_ids['redcap_repeat_instance'] = 1
+
+appended_df = pd.DataFrame(columns=['record_id', 'redcap_event_name', 'redcap_repeat_instrument', 'redcap_repeat_instance', 'redcap_data_access_group'])
 
 # Step 2: List of DataFrames to append
 dfs = [qc, atypia, p53, tff3]
@@ -65,8 +69,24 @@ for df in dfs:
     # Append the DataFrame with only the unique columns
     appended_df = pd.concat([appended_df, df_unique], axis=1)
 
-# column_order = []
-# appended_df = appended_df[column_order]
+for index, row in appended_df.iterrows():
+    if index in record_ids['cypath_lab_nmb'].values:
+        matching_row = record_ids[record_ids['cypath_lab_nmb'] == index]
+    elif index in record_ids['cypath_lab_nmb_rep'].values:
+        matching_row = record_ids[record_ids['cypath_lab_nmb_rep'] == index]
+        matching_row.loc[matching_row.index, 'redcap_repeat_instance'] = 2
+    else:
+        continue
+    appended_df.loc[index, appended_df.columns[:5]] = matching_row.iloc[0, :5]
+
+record_id = appended_df.pop('record_id')
+repeat = appended_df.pop('redcap_repeat_instance')
+
+appended_df.insert(0, 'record_id', record_id)
+appended_df.insert(1, 'redcap_repeat_instance', repeat)
+
+appended_df.sort_values(by=['record_id', 'redcap_repeat_instance'], inplace=True)
+
 output_path = '/media/prew01/BEST/BEST4/surveillance/BEST4_AI_crfs.csv'
 appended_df.to_csv(output_path)  # Save the appended data to a CSV file
 

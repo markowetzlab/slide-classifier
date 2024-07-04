@@ -89,7 +89,6 @@ if __name__ == '__main__':
                    'save_dir': args.save_dir,
                    'patch_dir': args.patch_path, 
                    'inference_dir': inference_dir,
-                   'crf_dir': crf_dir,
                    'annotation_dir': annotation_dir
                    }
     
@@ -408,19 +407,14 @@ if __name__ == '__main__':
         
         record = {
             'algorithm_cyted_sample_id': row['CYT ID'], 
-            'pot id': row['Pot ID'],
             'slide_filename': row['slide_id'],
             'positive_tiles': positive_tiles,
             'algorithm_result': algorithm_result,
             'tile_mapping': annotation_file,
             'algorithm_version': f'{args.model_path.split("/")[-1]}',
-            'redcap_repeat_instance': '0'
+            'redcap_repeat_instance': '1'
         }
         records.append(record)
-
-        crf = pd.DataFrame([record])
-        crf_path = os.path.join(directories['crf_dir'], slide_name + '_' + args.stain +'.csv')
-        crf.to_csv(crf_path, index=False)
 
     df = pd.DataFrame.from_dict(records)
     df.to_csv(os.path.join(directories['save_dir'], 'process_list.csv'), index=False)

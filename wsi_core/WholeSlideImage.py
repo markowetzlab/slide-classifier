@@ -262,9 +262,11 @@ class WholeSlideImage(object):
             return foreground_contours, hole_contours
         
         img = self.wsi.read_region((0,0), seg_level, self.level_dim[seg_level])
+
         if based_on == 'hed':
             mask, coverage = self.get_hed_mask(img, hed_contrast=contrast)
-            if (coverage < he_cutoff_percent) or (coverage == 90.0):
+            # if coverage is less than 5% or greater than 90%, use gray mask
+            if (coverage < he_cutoff_percent) or (coverage > 90.0):
                 mask, _ = self.get_gray_mask(img)
         elif based_on == 'gray':
             mask, _ = self.get_gray_mask(img)
@@ -293,7 +295,6 @@ class WholeSlideImage(object):
 
         # get bounding box of the mask
         props = sorted(regionprops(labeled_mask), key=lambda x: x.area, reverse=True)
-
         # Get the centroids of the bounding boxes
         centroids = [prop.centroid for prop in props]
         # Apply DBSCAN clustering
