@@ -96,8 +96,7 @@ if __name__ == '__main__':
         if not os.path.exists(path):
             os.makedirs(path, exist_ok=True)
 
-    if not args.silent:
-        print("Outputting inference to: ", directories['save_dir'])
+    print("Outputting inference to: ", directories['save_dir'])
 
     if args.stain == 'he':
         file_name = 'H&E'
@@ -180,8 +179,7 @@ if __name__ == '__main__':
     else:
         raise AssertionError('args.stain must be he/qc, tff3, or p53.')
 
-    if not args.silent:
-        print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
+    print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
 
     trained_model, model_params = get_network(network, class_names=classes, pretrained=False)
     try:
@@ -264,8 +262,7 @@ if __name__ == '__main__':
         if not os.path.exists(wsi):
             print(f'File {wsi} not found.')
             continue
-        if not args.silent:
-            print(f'\rProcessing case {index}/{len(process_list)}: ', end='')
+        print(f'\rProcessing case {index+1}/{len(process_list)} {row["CYT ID"]}: ', end='')
 
         slide_output = os.path.join(directories['inference_dir'], slide_name)
         if os.path.isfile(slide_output + '.csv'):
@@ -301,7 +298,6 @@ if __name__ == '__main__':
             since = time.time()
 
             with torch.no_grad():
-                print(f'\rCase {index}/{len(process_list)} {row["CYT ID"]} processing: ')
                 for inputs in tqdm(dataloader, disable=args.silent):
                     tile = inputs['image'].to(device)
                     tile_location = inputs['image'].meta['location'].numpy()
@@ -323,8 +319,7 @@ if __name__ == '__main__':
             predictions.to_csv(slide_output+'.csv', index=False)
 
             time_elapsed = time.time() - since
-            if not args.silent:
-                print('Inference complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
+            print('Inference complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
 
         positive_tiles = (predictions[ranked_class] > thresh).sum()
         if positive_tiles >= hcp_threshold:

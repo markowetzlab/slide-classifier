@@ -231,6 +231,7 @@ parser.add_argument('--patch_size', type = int, default=256,
 parser.add_argument('--patch', default=False, action='store_true')
 parser.add_argument('--seg', default=False, action='store_true')
 parser.add_argument('--base', default='hed', type=str, help='segmentation based on colour space (hed, gray)}')
+parser.add_argument('--max_bbox', type=int, default=-1, help='maximum number of bounding boxes')
 parser.add_argument('--stitch', default=False, action='store_true')
 parser.add_argument('--no_auto_skip', default=True, action='store_false')
 parser.add_argument('--save_dir', type = str,
@@ -272,7 +273,7 @@ if __name__ == '__main__':
 			os.makedirs(val, exist_ok=True)
 
 	seg_params = {'seg_level': -1, 'based_on': args.base, 'contrast': 1, 'keep_ids': 'none', 'exclude_ids': 'none'}
-	filter_params = {'min_pixel_count':25, 'a_t':10, 'a_h': 16, 'max_n_holes':2, 'max_dist':150, 'max_bboxes':2}
+	filter_params = {'min_pixel_count':25, 'a_t':20, 'a_h': 16, 'max_n_holes':2, 'max_dist':200, 'max_bboxes':args.max_bbox}
 	vis_params = {'vis_level': -1, 'line_thickness': 250}
 	patch_params = {'use_padding': True, 'contour_fn': 'four_pt'}
 
