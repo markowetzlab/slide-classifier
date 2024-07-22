@@ -35,9 +35,7 @@ conda create -y --name <name of env>
 conda activate <name of env>
 conda install -c conda-forge --file conda_requirements.txt
 ```
-Finally, as Slidl is not available through conda:
-```
-pip install slidl
+
 ```
 </details>
 
@@ -52,7 +50,7 @@ By default, this file uses the VGG-16 network, which is trained separately to pe
 <details>
 <summary>quality_control.py</summary>
 
-Arguments:
+<!-- Arguments:
 ```
 --description, takes a String to save the location of results to, defaults to triage
 
@@ -87,7 +85,7 @@ Specify script outputs:
 --xml, Flag to produce model outputs as annotation files in .xml (ASAP) format
 --json, Flag to produce model outputs as annotation files in .geojson (QuPath) format
 --vis, Flag to dsiplay the output of the model as a heatmap of areas to analyse
---thumbnail, Flag to save the vis thumbnail, vis must also be active
+--thumbnail, Flag to save the vis thumbnail, vis must also be active -->
 ```
 </details>
 
@@ -109,7 +107,7 @@ If you use this code please cite the original paper using the citation below:
 <details>
 <summary>diagnosis.py</summary>
 
-Arguments:
+<!-- Arguments:
 ```
 --description, takes a String to save the location of results to, defaults to triage
 
@@ -150,7 +148,7 @@ Specify script outputs:
 --xml, Flag to produce model outputs as annotation files in .xml (ASAP) format
 --json, Flag to produce model outputs as annotation files in .geojson (QuPath) format
 --vis, Flag to dsiplay the output of the model as a heatmap of areas to analyse
---thumbnail, Flag to save the vis thumbnail, vis must also be active
+--thumbnail, Flag to save the vis thumbnail, vis must also be active -->
 ```
 </details>
 

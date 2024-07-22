@@ -216,10 +216,10 @@ if __name__ == '__main__':
 
     eval_transforms = mt.Compose(
             [
-                mt.Resized(keys="image", spatial_size=(input_size, input_size)),
                 mt.ScaleIntensityRanged(keys="image", a_min=0, a_max=255, b_min=0.0, b_max=1.0),
                 mt.ToTensord(keys=("image")),
                 mt.TorchVisiond(keys=("image"), name="Normalize", mean=channel_means, std=channel_stds),
+                mt.TorchVisiond(keys=("image"), name="Resize", size=(input_size, input_size)),
                 mt.ToMetaTensord(keys=("image")),
             ]
         )
