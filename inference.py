@@ -1,17 +1,21 @@
 # This file runs tile-level inference on the training, calibration and internal validation cohort
 import argparse
 import os
+import shutil
 import time
 import h5py
 import numpy as np
 import pandas as pd
 import geojson
+import xmltodict
+
 from tqdm import tqdm
+
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 
-from monai.data import DataLoader, CSVDataset, PatchWSIDataset
+from monai.data import DataLoader, CSVDataset, PatchWSIDataset, OpenSlideWSIReader
 import monai.transforms as mt
 
 from dataset_processing import class_parser
@@ -61,7 +65,9 @@ def parse_args():
     
     #outputs
     parser.add_argument("--xml", action='store_true', help='produce annotation files for ASAP in .xml format')
+    parser.add_argument("--ndpa", action='store_true', help='produce annotation files for NDP Viewer in .ndpa format')
     parser.add_argument("--json", action='store_true', help='produce annotation files for QuPath in .geoJSON format')
+    parser.add_argument("--images", action='store_true', help='save images of positive tiles as png files')
 
     parser.add_argument('--silent', action='store_true', help='Flag which silences terminal outputs')
 
@@ -84,12 +90,14 @@ if __name__ == '__main__':
     crf_dir = os.path.join(args.save_dir, 'crfs')
     inference_dir = os.path.join(args.save_dir, 'inference')
     annotation_dir = os.path.join(args.save_dir, 'tile_annotations')
+    image_dir = os.path.join(args.save_dir, 'tile_images')
 
     directories = {'slide_dir': args.slide_path, 
                    'save_dir': args.save_dir,
                    'patch_dir': args.patch_path, 
                    'inference_dir': inference_dir,
-                   'annotation_dir': annotation_dir
+                   'annotation_dir': annotation_dir,
+                   'image_dir': image_dir,
                    }
     
     for path in directories.values():
@@ -252,7 +260,7 @@ if __name__ == '__main__':
 
     for index, row in process_list.iterrows():
         slide = row['slide_id']
-        slide_name = slide.replace(args.format, "")
+        slide_stem = slide.replace(args.format, "")
         try:
             wsi = os.path.join(directories['slide_dir'], slide)
         except:
@@ -264,16 +272,16 @@ if __name__ == '__main__':
             continue
         print(f'\rProcessing case {index+1}/{len(process_list)} {row["CYT ID"]}: ', end='')
 
-        slide_output = os.path.join(directories['inference_dir'], slide_name)
+        slide_output = os.path.join(directories['inference_dir'], slide_stem)
+        patch_path = os.path.join(directories['patch_dir'], slide_stem+'.h5')
+        patch_file = h5py.File(patch_path)['coords']
+        patch_size = patch_file.attrs['patch_size']
+        patch_level = patch_file.attrs['patch_level']
+        
         if os.path.isfile(slide_output + '.csv'):
             print(f'Inference for {row["CYT ID"]} already exists.')
             predictions = pd.read_csv(slide_output+'.csv')
         else:
-            patch_path = os.path.join(directories['patch_dir'], slide_name+'.h5')
-            patch_file = h5py.File(patch_path)['coords']
-            patch_size = patch_file.attrs['patch_size']
-            patch_level = patch_file.attrs['patch_level']
-
             locations = pd.DataFrame(np.array(patch_file), columns=['x_min','y_min'])
             locations['image'] = wsi
             print('Number of tiles:',len(locations))
@@ -330,76 +338,180 @@ if __name__ == '__main__':
             algorithm_result = 1
 
         annotation_file = None
-        if args.xml or args.json:
-            positive = predictions[predictions[ranked_class] > thresh]
+        positive = predictions[predictions[ranked_class] > thresh]
+        positive = positive.sort_values(by=ranked_class, ascending=False)
 
-            if len(positive) == 0:
-                print(f'No annotations found at current threshold for {slide_name}')
-            else:
-                if args.xml:
-                    annotation_file = slide_name+f'_{args.stain}'+'.xml'
-                    annotation_path = os.path.join(directories['annotation_dir'], annotation_file)
-                    if not os.path.exists(annotation_path):
-                        # Make ASAP file
-                        xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
-                        xml_tail =  f"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="{ranked_class}" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
+        if len(positive) == 0:
+            print(f'No annotations found at current threshold for {slide_stem}')
+        else:
+            if args.xml:
+                annotation_file = slide_stem+f'_{args.stain}'+'.xml'
+                annotation_path = os.path.join(directories['annotation_dir'], annotation_file)
+                if not os.path.exists(annotation_path):
+                    # Make ASAP file
+                    xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
+                    xml_tail =  f"""\t</Annotations>\t<AnnotationGroups>\t\t<Group Name="{ranked_class}" PartOfGroup="None" Color="#64FE2E">\t\t\t<Attributes />\t\t</Group>\t</AnnotationGroups></ASAP_Annotations>\n"""
 
-                        xml_annotations = ""
-                        for index, tile in positive.iterrows():
-                            xml_annotations = (xml_annotations +
-                                                "\t\t<Annotation Name=\""+str(tile[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
-                                                "\t\t\t<Coordinates>\n" +
-                                                "\t\t\t\t<Coordinate Order=\"0\" X=\""+str(tile['x_min'])+"\" Y=\""+str(tile['y_min'])+"\" />\n" +
-                                                "\t\t\t\t<Coordinate Order=\"1\" X=\""+str(tile['x_max'])+"\" Y=\""+str(tile['y_min'])+"\" />\n" +
-                                                "\t\t\t\t<Coordinate Order=\"2\" X=\""+str(tile['x_max'])+"\" Y=\""+str(tile['y_max'])+"\" />\n" +
-                                                "\t\t\t\t<Coordinate Order=\"3\" X=\""+str(tile['x_min'])+"\" Y=\""+str(tile['y_max'])+"\" />\n" +
-                                                "\t\t\t</Coordinates>\n" +
-                                                "\t\t</Annotation>\n")
-                        print('Creating automated annotation file for '+ slide_name)
-                        with open(annotation_path, "w") as f:
-                            f.write(xml_header + xml_annotations + xml_tail)
-                    else:
-                        print(f'Automated xml annotation file for {annotation_file} already exists.')
+                    xml_annotations = ""
+                    for index, tile in positive.iterrows():
+                        xml_annotations = (xml_annotations +
+                                            "\t\t<Annotation Name=\""+str(tile[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
+                                            "\t\t\t<Coordinates>\n" +
+                                            "\t\t\t\t<Coordinate Order=\"0\" X=\""+str(tile['x_min'])+"\" Y=\""+str(tile['y_min'])+"\" />\n" +
+                                            "\t\t\t\t<Coordinate Order=\"1\" X=\""+str(tile['x_max'])+"\" Y=\""+str(tile['y_min'])+"\" />\n" +
+                                            "\t\t\t\t<Coordinate Order=\"2\" X=\""+str(tile['x_max'])+"\" Y=\""+str(tile['y_max'])+"\" />\n" +
+                                            "\t\t\t\t<Coordinate Order=\"3\" X=\""+str(tile['x_min'])+"\" Y=\""+str(tile['y_max'])+"\" />\n" +
+                                            "\t\t\t</Coordinates>\n" +
+                                            "\t\t</Annotation>\n")
+                    print('Creating automated annotation file for '+ slide_stem)
+                    with open(annotation_path, "w") as f:
+                        f.write(xml_header + xml_annotations + xml_tail)
+                else:
+                    print(f'Automated xml annotation file for {annotation_file} already exists.')
 
-                if args.json:
-                    annotation_file = slide_name+f'_{args.stain}'+'.geojson'
-                    annotation_path = os.path.join(directories['annotation_dir'], annotation_file)
-                    if not os.path.exists(annotation_path):
-                        json_annotations = {"type": "FeatureCollection", "features":[]}
-                        for index, tile in positive.iterrows():
-                            color = [0, 0, 255]
-                            status = str(ranked_class)
+            if args.ndpa:
+                annotation_file = slide +'.ndpa'
+                annotation_path = os.path.join(directories['annotation_dir'], annotation_file)
 
-                            json_annotations['features'].append({
-                                "type": "Feature",
-                                "id": "PathDetectionObject",
-                                "geometry": {
-                                "type": "Polygon",
-                                "coordinates": [
-                                        [
-                                            [tile['x_min'], tile['y_min']],
-                                            [tile['x_max'], tile['y_min']],
-                                            [tile['x_max'], tile['y_max']],
-                                            [tile['x_min'], tile['y_max']],        
-                                            [tile['x_min'], tile['y_min']]
-                                        ]   
-                                    ]
-                                },
-                                "properties": {
-                                    "objectType": "annotation",
-                                    "name": str(status)+'_'+str(round(tile[ranked_class], 4))+'_'+str(tile['x_min']) +'_'+str(tile['y_min']),
-                                    "classification": {
-                                        "name": status,
-                                        "color": color
-                                    }
+                if not os.path.exists(annotation_path):
+                    reader = OpenSlideWSIReader(level=patch_level)
+                    slide = reader.read(wsi)
+
+                    #convert center of slide to nanometers (*1000)
+                    conversion_factor_x = float(slide.properties.get('openslide.mpp-x'))*1000
+                    conversion_factor_y = float(slide.properties.get('openslide.mpp-y'))*1000
+
+                    width_nm = slide.dimensions[0]/2 * conversion_factor_x
+                    height_nm = slide.dimensions[1]/2 * conversion_factor_y
+                    
+                    x_offset = int(width_nm) - int(slide.properties.get('hamamatsu.XOffsetFromSlideCentre'))
+                    y_offset = int(height_nm) - int(slide.properties.get('hamamatsu.YOffsetFromSlideCentre'))
+                    
+                    ndp_view_list = []
+                    for index, tile in positive.iterrows():
+                        coordinates = [
+                                        [tile['x_min'], tile['y_min']],
+                                        [tile['x_max'], tile['y_min']],
+                                        [tile['x_max'], tile['y_max']],
+                                        [tile['x_min'], tile['y_max']],        
+                                    ]   
+
+                        # Calculate x_mean and y_mean from pixel to nm
+                        x_mean = int(sum([coord[0] * conversion_factor_x for coord in coordinates]) / len(coordinates))
+                        y_mean = int(sum([coord[1] * conversion_factor_y for coord in coordinates]) / len(coordinates))
+                        
+                        ndp_coords = []
+                        # Convert the coordinates to ndp
+                        for coord in coordinates:
+                            ndp_coords.append({'x': int((coord[0] * conversion_factor_x) - x_offset), 'y': int((coord[1] * conversion_factor_y) - y_offset)})
+                        
+                        ndp_view_list.append({
+                            '@id': str(index+1),
+                            'title': str(ranked_class),
+                            'details': 'These are the details of Annotation '+str(index+1),
+                            'coordformat': 'nanometers',
+                            'lens': '3.628447',
+                            'x': str(x_mean),
+                            'y': str(y_mean),
+                            'z': '0',
+                            'showtitle': '1',
+                            'showhistogram': '0',
+                            'showlineprofile': '0',
+                            'annotation': {
+                                '@type': 'freehand',
+                                '@displayname': 'AnnotateRectangle',
+                                '@color': '#00ff00',
+                                'measuretype': '0',
+                                'closed': '1',
+                                'pointlist': {'point': ndp_coords},
+                                'specialtype': 'rectangle'
+                            }
+                        }
+                        )
+                    
+                    # Make the xml
+                    xml = {'annotations': {'ndpviewstate': ndp_view_list}}
+
+                    print('Creating automated annotation file for '+ slide_stem)
+                    with open(annotation_path, "w") as f:
+                        f.write(xmltodict.unparse(xml, pretty=True))
+                else:
+                    print(f'Automated xml annotation file for {annotation_file} already exists.')
+
+            if args.json:
+                annotation_file = slide_stem+f'_{args.stain}'+'.geojson'
+                annotation_path = os.path.join(directories['annotation_dir'], annotation_file)
+                if not os.path.exists(annotation_path):
+                    json_annotations = {"type": "FeatureCollection", "features":[]}
+                    for index, tile in positive.iterrows():
+                        color = [0, 0, 255]
+                        status = str(ranked_class)
+
+                        json_annotations['features'].append({
+                            "type": "Feature",
+                            "id": "PathDetectionObject",
+                            "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [
+                                    [
+                                        [tile['x_min'], tile['y_min']],
+                                        [tile['x_max'], tile['y_min']],
+                                        [tile['x_max'], tile['y_max']],
+                                        [tile['x_min'], tile['y_max']],        
+                                        [tile['x_min'], tile['y_min']]
+                                    ]   
+                                ]
+                            },
+                            "properties": {
+                                "objectType": "annotation",
+                                "name": str(status)+'_'+str(round(tile[ranked_class], 4))+'_'+str(tile['x_min']) +'_'+str(tile['y_min']),
+                                "classification": {
+                                    "name": status,
+                                    "color": color
                                 }
-                            })
-                        print('Creating automated annotation file for ' + slide_name)
-                        with open(annotation_path, "w") as f:
-                            geojson.dump(json_annotations, f, indent=0)
-                    else:
-                        print(f'Automated geojson annotation file for {annotation_file} already exists')
-        
+                            }
+                        })
+                    print('Creating automated annotation file for ' + slide_stem)
+                    with open(annotation_path, "w") as f:
+                        geojson.dump(json_annotations, f, indent=0)
+                else:
+                    print(f'Automated geojson annotation file for {annotation_file} already exists')
+            
+            if args.images:
+                if len(positive) == 0:
+                    print(f'\rNo annotations found at current threshold for {slide_stem}')
+                else:
+                    # slide = openslide.OpenSlide(wsi)
+                    reader = OpenSlideWSIReader(level=patch_level)
+                    slide = reader.read(wsi)
+                    slide_images = os.path.join(directories['image_dir'], slide_stem)
+                    if not os.path.exists(slide_images):
+                        os.makedirs(slide_images, exist_ok=True)
+                    tiles = 0
+                    for index, tile in positive.iterrows():
+                        tiles += 1
+                        
+                        status = str(ranked_class)
+
+                        x_min, y_min = int(tile['x_min']), int(tile['y_min'])
+                        w, h = int(tile['x_max']) - x_min, int(tile['y_max']) - y_min
+
+                        zoom_out_factor = 2  # Define how much to zoom out. For example, 2 means doubling the width and height.
+                        # Adjust the top-left corner to keep the initial ROI centered
+                        new_x = x_min - (w * (zoom_out_factor - 1) // 2)
+                        new_y = y_min - (h * (zoom_out_factor - 1) // 2)
+                        # Adjust the width and height
+                        new_w = w * zoom_out_factor
+                        new_h = h * zoom_out_factor
+
+                        tile_image = slide.read_region((new_x, new_y), patch_level, (new_w, new_h))
+                        tile_image = tile_image.convert('RGB')
+                        tile_image.save(os.path.join(directories['image_dir'], slide_stem, f'{status}_{str(round(tile[ranked_class], 4))}_{str(int(tile["x_min"]))}_{str(int(tile["y_min"]))}.png'))
+                        if tiles == 5:
+                            break
+                    
+                    shutil.make_archive(slide_images , 'zip', slide_images)
+
         record = {
             'algorithm_cyted_sample_id': row['CYT ID'], 
             'slide_filename': row['slide_id'],

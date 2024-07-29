@@ -125,7 +125,7 @@ class WholeSlideImage(object):
         foreground = np.zeros_like(img_hed[:, :, 0])
         ihc = hed2rgb(np.stack((img_hed[:, :, 1], foreground, foreground), axis=-1)) # we are only intrested in 'e' of 'hed'
         contrast_mask = ihc.copy()
-        contrast_mask[contrast_mask>=0.99] = 0 #Set all values close to white as background
+        contrast_mask[contrast_mask>=0.95] = 0 #Set all values close to white as background
         contrast_mask[contrast_mask!=0] = 1
         contrast_mask = rgb2gray(contrast_mask)
         
