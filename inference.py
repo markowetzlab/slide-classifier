@@ -33,13 +33,13 @@ def parse_args():
     parser.add_argument("--stain", choices=['he', 'qc', 'p53', 'tff3'], help="Stain to consider H&E (he), quality control (qc) or P53 (p53), TFF3(tff3)")
     parser.add_argument("--process_list", default=None, help="file containing slide-level ground truth to use.")
     parser.add_argument("--slide_path", default='slides', help="slides root folder")
-    parser.add_argument("--format", default=".ndpi", help="extension of whole slide image")
     parser.add_argument("--reader", default='openslide', help="monai slide backend reader ('openslide' or 'cuCIM')")
 
     #model path and parameters
     parser.add_argument("--network", default='vgg_16', help="DL architecture to use")
     parser.add_argument("--model_path", required=True, help="path to stored model weights")
 
+    #preprocessed patch locations and parameters
     parser.add_argument("--patch_path", default='patches', help="path to stored (.h5 or .csv) patch files")
     parser.add_argument("--input_size", default=None, type=int, help="size of tiles to extract")
 
@@ -47,6 +47,7 @@ def parse_args():
     parser.add_argument("--batch_size", default=None, help="Batch size. Default is to use values set for architecture to run on 1 GPU.", type=int)
     parser.add_argument("--num_workers", type=int, default=8, help="Number of workers to call for DataLoader")
     
+    #thresholds
     parser.add_argument("--he_threshold", default=0.99993, type=float, help="A threshold for detecting gastric cardia in H&E")
     parser.add_argument("--p53_threshold", default= 0.99, type=float, help="A threshold for Goblet cell detection in p53")
     parser.add_argument("--qc_threshold", default=0.99, help="A threshold for detecting gastric cardia in H&E")
@@ -84,27 +85,17 @@ def torchmodify(name):
 if __name__ == '__main__':
     args = parse_args()
     
+    model_ver = os.path.splitext(os.path.basename(args.model_path))[0]
     network = args.network
     reader = args.reader
 
-    crf_dir = os.path.join(args.save_dir, 'crfs')
-    inference_dir = os.path.join(args.save_dir, 'inference')
-    annotation_dir = os.path.join(args.save_dir, 'tile_annotations')
-    image_dir = os.path.join(args.save_dir, 'tile_images')
-
-    directories = {'slide_dir': args.slide_path, 
-                   'save_dir': args.save_dir,
-                   'patch_dir': args.patch_path, 
-                   'inference_dir': inference_dir,
-                   'annotation_dir': annotation_dir,
-                   'image_dir': image_dir,
+    input_directories = {'slide_dir': args.slide_path,
+                    'mask_dir': os.path.join(args.patch_path, 'masks'),
+                    'patch_dir': os.path.join(args.patch_path, 'patches'),
+                    'save_dir': args.save_dir,
                    }
     
-    for path in directories.values():
-        if not os.path.exists(path):
-            os.makedirs(path, exist_ok=True)
-
-    print("Outputting inference to: ", directories['save_dir'])
+    print(f"Outputting inference to: {input_directories['save_dir']}")
 
     if args.stain == 'he':
         file_name = 'H&E'
@@ -185,7 +176,7 @@ if __name__ == '__main__':
         channel_means = [0.485, 0.456, 0.406]
         channel_stds = [0.229, 0.224, 0.225]
     else:
-        raise AssertionError('args.stain must be he/qc, tff3, or p53.')
+        raise AssertionError(f'stain type must be he/qc, tff3, or p53 but received {str(args.stain)}.')
 
     print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
 
@@ -233,57 +224,72 @@ if __name__ == '__main__':
         )
 
     if args.process_list is not None:
-        if os.path.isfile(args.process_list):
-            #TODO read labels from csv to build process list
-            process_list = pd.read_csv(args.process_list, index_col=0)
-            process_list.dropna(subset=[file_name], inplace=True)
-            if args.impute:
-                process_list[gt_label] = process_list[gt_label].fillna('N')
-            else:
-                process_list.dropna(subset=[gt_label], inplace=True)
-            process_list.sort_index(inplace=True)
-            process_list[gt_label] = process_list[gt_label].map(mapping)
+        # take in a txt or csv file with slide names to process
+        if args.process_list.endswith('.txt'):
+            with open(args.process_list, 'r') as file:
+                process_list = [line.strip() for line in file.readlines()]
+                process_list = pd.DataFrame(process_list, columns=['slide_id'])
+        elif args.process_list.endswith('.csv'):
+            process_list = pd.read_csv(args.process_list)
         else:
-            raise AssertionError('Not a valid path for ground truth labels.')
+            raise ValueError("Invalid file format. Only txt and csv files are supported.")
     else:
         process_list = []
-        for file in os.listdir(directories['slide_dir']):
+        for file in os.listdir(input_directories['slide_dir']):
             if file.endswith(('.ndpi','.svs')):
                 process_list.append(file)
         slides = sorted(process_list)
         process_list = pd.DataFrame(slides, columns=['slide_id'])
-        sample_id = process_list['slide_id'].str.split(' ')
-        process_list['CYT ID'] = sample_id.str[0]
-        process_list['Pot ID'] = sample_id.str[2]
+
+    # Extract the sample ID and pot ID from the slide name
+    sample_id = process_list['slide_id'].str.split(' ')
+    process_list['CYT ID'] = sample_id.str[0]
+    process_list['Pot ID'] = sample_id.str[2]
+    process_list.sort_index(inplace=True)
 
     records = []
 
     for index, row in process_list.iterrows():
+        case = row["CYT ID"]
         slide = row['slide_id']
-        slide_stem = slide.replace(args.format, "")
+        # get base string of slide name
+        slide_stem = os.path.splitext(os.path.basename(slide))[0]
         try:
-            wsi = os.path.join(directories['slide_dir'], slide)
+            wsi_path = os.path.join(input_directories['slide_dir'], slide)
         except:
             print(f'File {slide} not found.')
             continue
 
-        if not os.path.exists(wsi):
-            print(f'File {wsi} not found.')
+        if not os.path.exists(wsi_path):
+            print(f'File {wsi_path} not found.')
             continue
-        print(f'\rProcessing case {index+1}/{len(process_list)} {row["CYT ID"]}: ', end='')
+        print(f'\rProcessing case {index+1}/{len(process_list)} {case}: ', end='')
 
-        slide_output = os.path.join(directories['inference_dir'], slide_stem)
-        patch_path = os.path.join(directories['patch_dir'], slide_stem+'.h5')
-        patch_file = h5py.File(patch_path)['coords']
+        output_dir = os.path.join(args.save_dir, slide_stem)
+
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+
+        mask_file = os.path.join(input_directories['mask_dir'], slide_stem+'.jpg')
+        patch_file = os.path.join(input_directories['patch_dir'], slide_stem+'.h5')
+        patch_file = h5py.File(patch_file)['coords']
         patch_size = patch_file.attrs['patch_size']
         patch_level = patch_file.attrs['patch_level']
-        
-        if os.path.isfile(slide_output + '.csv'):
-            print(f'Inference for {row["CYT ID"]} already exists.')
-            predictions = pd.read_csv(slide_output+'.csv')
+
+        tile_inference = os.path.join(output_dir, model_ver+'.csv')
+
+        if os.path.isfile(tile_inference):
+            print(f'Inference for {case} already exists.')
+            predictions = pd.read_csv(tile_inference)
         else:
+            #copy mask file to output directory for reference
+            # destination_file = mask_file.replace(input_directories['mask_dir'], output_dir)
+            # destination_file = destination_file.replace(slide_stem, 'mask')
+            # shutil.copy2(mask_file, destination_file)
+            # print(f'File copied from {mask_file} to {destination_file}')
+            
             locations = pd.DataFrame(np.array(patch_file), columns=['x_min','y_min'])
-            locations['image'] = wsi
+            locations['image'] = wsi_path
             print('Number of tiles:',len(locations))
             #monai coordinates are trasposed
             patch_locations = CSVDataset(locations,
@@ -324,7 +330,7 @@ if __name__ == '__main__':
             predictions['x_max'] = predictions['x_min'] + patch_size
             predictions['y_max'] = predictions['y_min'] + patch_size
             predictions = predictions.reindex(columns=['x_min', 'y_min', 'x_max', 'y_max'] + classes)
-            predictions.to_csv(slide_output+'.csv', index=False)
+            predictions.to_csv(tile_inference, index=False)
 
             time_elapsed = time.time() - since
             print('Inference complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
@@ -337,7 +343,7 @@ if __name__ == '__main__':
         else:
             algorithm_result = 1
 
-        annotation_file = None
+        annotation_path = None
         positive = predictions[predictions[ranked_class] > thresh]
         positive = positive.sort_values(by=ranked_class, ascending=False)
 
@@ -345,8 +351,7 @@ if __name__ == '__main__':
             print(f'No annotations found at current threshold for {slide_stem}')
         else:
             if args.xml:
-                annotation_file = slide_stem+f'_{args.stain}'+'.xml'
-                annotation_path = os.path.join(directories['annotation_dir'], annotation_file)
+                annotation_path = os.path.join(output_dir, model_ver+'.xml')
                 if not os.path.exists(annotation_path):
                     # Make ASAP file
                     xml_header = """<?xml version="1.0"?><ASAP_Annotations>\t<Annotations>\n"""
@@ -354,28 +359,29 @@ if __name__ == '__main__':
 
                     xml_annotations = ""
                     for index, tile in positive.iterrows():
-                        xml_annotations = (xml_annotations +
-                                            "\t\t<Annotation Name=\""+str(tile[ranked_class+'_probability'])+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
+                        xml_annotations += ("\t\t<Annotation Name=\""+str(ranked_class + '_' + str(tile[ranked_class]))+"\" Type=\"Polygon\" PartOfGroup=\""+ranked_class+"\" Color=\"#F4FA58\">\n" +
                                             "\t\t\t<Coordinates>\n" +
                                             "\t\t\t\t<Coordinate Order=\"0\" X=\""+str(tile['x_min'])+"\" Y=\""+str(tile['y_min'])+"\" />\n" +
                                             "\t\t\t\t<Coordinate Order=\"1\" X=\""+str(tile['x_max'])+"\" Y=\""+str(tile['y_min'])+"\" />\n" +
                                             "\t\t\t\t<Coordinate Order=\"2\" X=\""+str(tile['x_max'])+"\" Y=\""+str(tile['y_max'])+"\" />\n" +
                                             "\t\t\t\t<Coordinate Order=\"3\" X=\""+str(tile['x_min'])+"\" Y=\""+str(tile['y_max'])+"\" />\n" +
                                             "\t\t\t</Coordinates>\n" +
-                                            "\t\t</Annotation>\n")
+                                            "\t\t</Annotation>\n"
+                                            )
                     print('Creating automated annotation file for '+ slide_stem)
                     with open(annotation_path, "w") as f:
                         f.write(xml_header + xml_annotations + xml_tail)
                 else:
-                    print(f'Automated xml annotation file for {annotation_file} already exists.')
+                    print(f'Automated xml annotation file for {slide_stem} already exists.')
 
             if args.ndpa:
-                annotation_file = slide +'.ndpa'
-                annotation_path = os.path.join(directories['annotation_dir'], annotation_file)
+                annotation_path = os.path.join(output_dir, slide +'.ndpa')
 
                 if not os.path.exists(annotation_path):
                     reader = OpenSlideWSIReader(level=patch_level)
-                    slide = reader.read(wsi)
+                    if not slide.endswith('.ndpi'):
+                        raise AssertionError('Only .ndpi files are supported for NDP Viewer annotations.')
+                    slide = reader.read(wsi_path)
 
                     #convert center of slide to nanometers (*1000)
                     conversion_factor_x = float(slide.properties.get('openslide.mpp-x'))*1000
@@ -436,11 +442,10 @@ if __name__ == '__main__':
                     with open(annotation_path, "w") as f:
                         f.write(xmltodict.unparse(xml, pretty=True))
                 else:
-                    print(f'Automated xml annotation file for {annotation_file} already exists.')
+                    print(f'Automated xml annotation file for {annotation_path} already exists.')
 
             if args.json:
-                annotation_file = slide_stem+f'_{args.stain}'+'.geojson'
-                annotation_path = os.path.join(directories['annotation_dir'], annotation_file)
+                annotation_path = os.path.join(output_dir, model_ver+'.geojson')
                 if not os.path.exists(annotation_path):
                     json_annotations = {"type": "FeatureCollection", "features":[]}
                     for index, tile in positive.iterrows():
@@ -475,16 +480,15 @@ if __name__ == '__main__':
                     with open(annotation_path, "w") as f:
                         geojson.dump(json_annotations, f, indent=0)
                 else:
-                    print(f'Automated geojson annotation file for {annotation_file} already exists')
+                    print(f'Automated geojson annotation file for {slide_stem} already exists')
             
             if args.images:
                 if len(positive) == 0:
                     print(f'\rNo annotations found at current threshold for {slide_stem}')
                 else:
-                    # slide = openslide.OpenSlide(wsi)
                     reader = OpenSlideWSIReader(level=patch_level)
-                    slide = reader.read(wsi)
-                    slide_images = os.path.join(directories['image_dir'], slide_stem)
+                    slide = reader.read(wsi_path)
+                    slide_images = os.path.join(output_dir, 'images')
                     if not os.path.exists(slide_images):
                         os.makedirs(slide_images, exist_ok=True)
                     tiles = 0
@@ -506,25 +510,25 @@ if __name__ == '__main__':
 
                         tile_image = slide.read_region((new_x, new_y), patch_level, (new_w, new_h))
                         tile_image = tile_image.convert('RGB')
-                        tile_image.save(os.path.join(directories['image_dir'], slide_stem, f'{status}_{str(round(tile[ranked_class], 4))}_{str(int(tile["x_min"]))}_{str(int(tile["y_min"]))}.png'))
+                        tile_image.save(os.path.join(slide_images, f'{status}_{str(round(tile[ranked_class], 4))}_{str(int(tile["x_min"]))}_{str(int(tile["y_min"]))}.png'))
                         if tiles == 5:
                             break
                     
-                    shutil.make_archive(slide_images , 'zip', slide_images)
+                    # shutil.make_archive(slide_images , 'zip', slide_images)
 
         record = {
-            'algorithm_cyted_sample_id': row['CYT ID'], 
-            'slide_filename': row['slide_id'],
+            'algorithm_cyted_sample_id': case,
+            'slide_filename': slide_stem,
             'positive_tiles': positive_tiles,
             'algorithm_result': algorithm_result,
-            'tile_mapping': annotation_file,
-            'algorithm_version': f'{args.model_path.split("/")[-1]}',
-            'redcap_repeat_instance': '1'
+            'tile_mapping': annotation_path,
+            'algorithm_version': model_ver,
         }
         records.append(record)
 
     df = pd.DataFrame.from_dict(records)
-    df.to_csv(os.path.join(directories['save_dir'], 'process_list.csv'), index=False)
+    date = time.strftime('%d%m%y')
+    df.to_csv(os.path.join(args.save_dir, args.stain+f'_process_list_{date}.csv'), index=False)
     print(f'Number of HCP slides: {(df["algorithm_result"] == 3).sum()}')
     print(f'Number of LCP slides: {(df["algorithm_result"] == 2).sum()}')
     print(f'Number of Negative slides: {(df["algorithm_result"] == 1).sum()}')
