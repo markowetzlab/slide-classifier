@@ -282,11 +282,11 @@ if __name__ == '__main__':
             print(f'Inference for {case} already exists.')
             predictions = pd.read_csv(tile_inference)
         else:
-            #copy mask file to output directory for reference
-            # destination_file = mask_file.replace(input_directories['mask_dir'], output_dir)
-            # destination_file = destination_file.replace(slide_stem, 'mask')
-            # shutil.copy2(mask_file, destination_file)
-            # print(f'File copied from {mask_file} to {destination_file}')
+            # copy mask file to output directory for reference
+            destination_file = mask_file.replace(input_directories['mask_dir'], output_dir)
+            destination_file = destination_file.replace(slide_stem, 'mask')
+            shutil.copy2(mask_file, destination_file)
+            print(f'File copied from {mask_file} to {destination_file}')
             
             locations = pd.DataFrame(np.array(patch_file), columns=['x_min','y_min'])
             locations['image'] = wsi_path
@@ -438,11 +438,11 @@ if __name__ == '__main__':
                     # Make the xml
                     xml = {'annotations': {'ndpviewstate': ndp_view_list}}
 
-                    print('Creating automated annotation file for '+ slide_stem)
+                    print('Creating automated ndpa annotation file for '+ slide_stem)
                     with open(annotation_path, "w") as f:
                         f.write(xmltodict.unparse(xml, pretty=True))
                 else:
-                    print(f'Automated xml annotation file for {annotation_path} already exists.')
+                    print(f'Automated ndpa annotation file for {annotation_path} already exists.')
 
             if args.json:
                 annotation_path = os.path.join(output_dir, model_ver+'.geojson')
@@ -476,19 +476,21 @@ if __name__ == '__main__':
                                 }
                             }
                         })
-                    print('Creating automated annotation file for ' + slide_stem)
+                    print('Creating automated geojson annotation file for ' + slide_stem)
                     with open(annotation_path, "w") as f:
                         geojson.dump(json_annotations, f, indent=0)
                 else:
                     print(f'Automated geojson annotation file for {slide_stem} already exists')
-            
+
             if args.images:
                 if len(positive) == 0:
-                    print(f'\rNo annotations found at current threshold for {slide_stem}')
+                    print(f'\rNo annotations found above current threshold for {slide_stem}')
+                    #produce the top 5 tiles that would otherwise be classed as negative for reference
                 else:
                     reader = OpenSlideWSIReader(level=patch_level)
                     slide = reader.read(wsi_path)
                     slide_images = os.path.join(output_dir, 'images')
+                    print(f'Creating images for {slide_stem} at {slide_images}')
                     if not os.path.exists(slide_images):
                         os.makedirs(slide_images, exist_ok=True)
                     tiles = 0
@@ -513,8 +515,8 @@ if __name__ == '__main__':
                         tile_image.save(os.path.join(slide_images, f'{status}_{str(round(tile[ranked_class], 4))}_{str(int(tile["x_min"]))}_{str(int(tile["y_min"]))}.png'))
                         if tiles == 5:
                             break
-                    
-                    # shutil.make_archive(slide_images , 'zip', slide_images)
+                
+                # shutil.make_archive(slide_images , 'zip', slide_images)
 
         record = {
             'algorithm_cyted_sample_id': case,

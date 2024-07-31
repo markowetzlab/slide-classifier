@@ -1,13 +1,15 @@
+import argparse
+import os
+import time
+
+import numpy as np
+import pandas as pd
+
 # internal imports
+from wsi_core.batch_process_utils import initialize_df
 from wsi_core.WholeSlideImage import WholeSlideImage
 from wsi_core.wsi_utils import StitchCoords
-from wsi_core.batch_process_utils import initialize_df
-# other imports
-import os
-import numpy as np
-import time
-import argparse
-import pandas as pd
+
 
 def stitching(file_path, wsi_object, downscale = 64):
 	start = time.time()
@@ -82,9 +84,10 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 	seg_times = 0.
 	patch_times = 0.
 	stitch_times = 0.
+	date = time.strftime('%d%m%y')
 
 	for i in range(total):
-		df.to_csv(os.path.join(save_dir, 'process_list_autogen.csv'), index=False)
+		df.to_csv(os.path.join(save_dir, 'process_list_'+{str(date)}+'.csv'), index=False)
 		idx = process_stack.index[i]
 		slide = process_stack.loc[idx, 'slide_id']
 		print("\n\nprogress: {:.2f}, {}/{}".format(i/total, i, total))
@@ -214,7 +217,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 	patch_times /= total
 	stitch_times /= total
 
-	df.to_csv(os.path.join(save_dir, 'process_list_autogen.csv'), index=False)
+	df.to_csv(os.path.join(save_dir, 'process_list_'+{str(date)}+'.csv'), index=False)
 	print("average segmentation time in s per slide: {}".format(seg_times))
 	print("average filter_paramspatching time in s per slide: {}".format(patch_times))
 	print("average stiching time in s per slide: {}".format(stitch_times))

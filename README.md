@@ -1,12 +1,14 @@
 # Cytosponge Triage
 
-This repository contains the functional implementation of the code for analysing histopathology slides produced using a Cytosponge, from the following papers: 
+This repository contains the functional implementation of the code for analysing histopathology slides produced using a EndoSign, from the following papers: 
 
 Triage-driven diagnosis of Barrett’s esophagus for early detection of esophageal adenocarcinoma using deep learning - [Paper](https://www.nature.com/articles/s41591-021-01287-9) [Code](https://github.com/markowetzlab/cytosponge-triage)
 
 Use of a Cytosponge biomarker panel to prioritise endoscopic Barrett's oesophagus surveillance: a cross-sectional study followed by a real-world prospective pilot - [Paper](https://doi.org/10.1016/S1470-2045(21)00667-7) [Code](https://github.com/markowetzlab/barretts-progression-detection)
 
 Trained model weights can be found at the following link: [Weights](https://drive.google.com/drive/folders/1XYv1OdUg_z_t0GXq2k2a9hhSxlTXvxuZ?usp=sharing)
+
+Some paths and outputs of this repository are hard-coded and is not intended for wider use cases. Therefore, you may want to change your paths accordingly.
 
 ## Requirements
 <details>
@@ -16,6 +18,12 @@ To copy this repository into your local workspace you can copy one of the functi
 ```
 git clone https://github.com/markowetzlab/slide-classifier.git
 ```
+
+or using the [github cli](https://cli.github.com/) (recommended):
+```
+gh repo clone markowetzlab/slide-classifier
+```
+
 </details>
 
 <details>
@@ -31,65 +39,137 @@ pip install -r requirements.txt
 
 Alternatively, you can first install anaconda and create a virtual environment using the below commands:
 ```
-conda create -y --name <name of env>
-conda activate <name of env>
-conda install -c conda-forge --file conda_requirements.txt
-```
-
+conda create --name <env> --file requirements.txt
+conda active <env>
 ```
 </details>
 
-***
+## Patching:
+For speed, efficiency, and reproducibility, slides are first segmented using modified code from [CLAM](https://github.com/mahmoodlab/CLAM/tree/master) (Lu et al. 2022) except with our improved Tissue Segmentation algorithm [TissueTector](https://github.com/markowetzlab/tissue_segmentation).
 
-## Quality Control:
-
-This file interprets the suitability of a given cytosponge slide from a patient. This code takes in a H&E or TFF3 slide and outputs a count for the number of target tiles and secondary tiles as well as an optional annotation file for viewing.
-
-By default, this file uses the VGG-16 network, which is trained separately to perform quality control analysis on H&E slides (i.e. Gastric-columnar Epithelium and Intestinal Metaplasia detection), or Goblet cell detection from TFF3 slides, with thresholds determined from the paper.
+This also allows us to automatically remove pieces of control tissue that are present in IHC slides, including P53 and TFF3.
 
 <details>
-<summary>quality_control.py</summary>
+<summary>patching.py</summary>
+Example usage of this file for H&E images is as follows, which transforms the slide into the HED colour space first and segments using the Eosin colour channel, with optional size and level arguments to segment:
 
-<!-- Arguments:
 ```
---description, takes a String to save the location of results to, defaults to triage
+python patching.py --source <slide_dir> --save_dir <patch_dir> --patch_size 400 --patch_level 0 --step_size 400 --seg --patch --stitch
+```
 
-Slide properties:
---stain, choices are "he" or "tff3" - Flag to specify the type of data being used
---slide_path, Path to Slide(s) location/root folder
---format, WSI Extension name, default is .ndpi
---tile_size, Size of tile to generate for model input, default is 400 pixels
---overlap, Fraction of tile edge to extract with overlapping neighboring tiles
---foreground_only, Flag to detect foreground of slide and only perform analysis on tissue
---labels, CSV file containing pathologist ground truth
+For IHC images, this script can be modified to remove certain pieces of tissue, for example filtering for only the largest bounding boxes, and segmenting via a grayscale colour space.
 
-Model and path to model weights
---network, defaults to VGG 16, specify architecture to use: see models for available
---model_path, path to stored model weights, must specify
+You can also specify a list of slides to process with either a txt file or csv file (assuming the slide column is labelled as slide_id).
 
-Data prepocessing:
---channel_means, Channel Means as a list to normalise around, default is the imagenet channel averages i.e. [0.485, 0.456, 0.406]
---channel_stds, Channel standard deviation to normalise around, default is the imagenet channel std i.e. [0.229, 0.224, 0.225]
---batch_size, Batch size to infer on, defaults to architecture determined batch size
---num_workers, Number of CPU workers
+```
+python patching.py --source <slide_dir> --save_dir <patch_dir> --patch_size 400 --patch_level 0 --step_size 400 --seg --patch --stitch --max_bbox 2 --process_list slides.txt
+```
 
-Thresholds:
---qc_threshold, Threshold of model output to consider as positive for target classes, default is 0.99 as determined by the paper
---tff3_threshold, Threshold of model output to consider as positive for target classes, default is 0.93 as determined by the paper
---tile_cutoff, Threhsold number of tiles to consider as positive, default is 6 as determined in the paper
+A fill list of arguments can be found by runningL
+```
+python patching.py --help
+```
 
-Specify script outputs:
---output, Path to save outputs to
---csv, Flag to save data as CSV file including tile counts
---stats, Flag to produce Precision-Recall plot
---xml, Flag to produce model outputs as annotation files in .xml (ASAP) format
---json, Flag to produce model outputs as annotation files in .geojson (QuPath) format
---vis, Flag to dsiplay the output of the model as a heatmap of areas to analyse
---thumbnail, Flag to save the vis thumbnail, vis must also be active -->
+</details>
+
+## Inference:
+
+This all in one file performs inference using the model as defined by the ```stain``` argument interprets the suitability of a given cytosponge slide from a patient. 
+
+This code takes in slide and outputs a count for the number of target class tiles, as well as optional annotation files for viewing in various viewers.
+
+A full list of arguments can be found by running:
+
+```
+python inference.py --help
+```
+This file outputs a .csv file with model outputs for each patch as created in ```patching.py``` for later thresholding.
+
+Optional outputs for this script include:
+```
+--json geoJSON file to be read in by open-source slide viewer QuPath
+--xml annotation file to be read by the ASAP slide viewer software
+--ndpa annotation file to be read by Hamamatsu specific NDP viewer software
+--images Produce the top-*k* positive tiles of the ranked_class as images for quick viewing
+```
+
+<details>
+<summary>Quality Control</summary>
+
+Example usage of the inference script for determining the presence of Gastric cardia from the EndoSign:
+```
+CUDA_VISIBLE_DEVICES=0 python inference.py --stain qc \\
+--network vgg16 \\
+--model_path <path to qc model (he vgg16)> \\
+--slide_path <path to raw slide files to read from> \\
+--patch_path <path to hdf5 (.h5) patches from patching.py> \\
+--save_dir <path to output folder> \\
+--json \\
+--process_list <txt or csv files of slides to infer>   
+```
+
+By default, this file uses the VGG-16 network, which is trained separately to perform quality control by detecting Gastric-columnar Epithelium from H&E slides, but only supports inference through one GPU.
+</details>
+
+<details>
+<summary>Positive TFF3 detection</summary>
+
+Example usage of the inference script for determining the presence of positively stained TFF3 goblet cells from the IHC slides:
+```
+CUDA_VISIBLE_DEVICES=0 python inference.py --stain tff3 \\
+--network vgg16 \\
+--model_path <path to tff3 model (tff3 vgg16)> \\
+--slide_path <path to raw slide files to read from> \\
+--patch_path <path to hdf5 (.h5) patches from patching.py> \\
+--save_dir <path to output folder> \\
+--json \\
+--process_list <txt or csv files of slides to infer>   
 ```
 </details>
 
-If you use this code please cite the original paper using the citation below:
+<details>
+<summary>Atypical Gastric Cardia detection</summary>
+Example usage of the inference script for determining the early presence of atypical gastric cardia from H&E images:
+
+```
+CUDA_VISIBLE_DEVICES=0,1 python inference.py --stain he \\
+--network vit_l_16 \\
+--model_path <path to atypia model (he vit_l_16)> \\
+--slide_path <path to raw slide files to read from> \\
+--patch_path <path to hdf5 (.h5) patches from patching.py> \\
+--save_dir <path to output folder> \\
+--json \\
+--process_list <txt or csv files of slides to infer>   
+```
+This model supports the use of multi-gpu processing by specifying the GPU IDs in CUDA_VISIBLE_DEVICES
+
+</details>
+<details>
+<summary>Positive P53 detection</summary>
+Example usage of the inference script for determining the presence of positive p53 stained nuclei from P53-stained IHC images:
+
+```
+CUDA_VISIBLE_DEVICES=0,1 python inference.py --stain p53 \\
+--network convnext_large \\
+--model_path <path to p53 model (p53 convnext_large)> \\
+--slide_path <path to raw slide files to read from> \\
+--patch_path <path to hdf5 (.h5) patches from patching.py> \\
+--save_dir <path to output folder> \\
+--json \\
+--process_list <txt or csv files of slides to infer>   
+```
+</details>
+
+## Collating results
+Once all models have been run, results can be collated into one csv file for upload to the RedCap database as part of the ongoing BEST4 trial:
+```
+python crf.py
+```
+
+***
+If you use this code please cite the original paper using the citation below.
+
+Gastric cardia detection and TFF3 counting:
 ```
 @article{gehrung2021triage,
   title={Triage-driven diagnosis of Barrett’s esophagus for early detection of esophageal adenocarcinoma using deep learning},
@@ -102,57 +182,8 @@ If you use this code please cite the original paper using the citation below:
   publisher={Nature Publishing Group US New York}
 }
 ```
-***
-## Triage and Automated Diagnosis
-<details>
-<summary>diagnosis.py</summary>
 
-<!-- Arguments:
-```
---description, takes a String to save the location of results to, defaults to triage
-
-Slide properties:
---stain, choices are "he" or "tff3" - Flag to specify the type of data being used
---slide_path, Path to Slide(s) location/root folder
---format, WSI Extension name, default is .ndpi
---tile_size, Size of tile to generate for model input, default is 400 pixels
---overlap, Fraction of tile edge to extract with overlapping neighboring tiles
---foreground_only, Flag to detect foreground of slide and only perform analysis on tissue
---labels, CSV file containing pathologist ground truth
-
-Model and path to model weights
---network, defaults to VGG 16, specify architecture to use: see models for available
---model_path, path to stored model weights, must specify
-
-Data prepocessing:
---channel_means, Channel Means as a list to normalise around, default is the imagenet channel averages i.e. [0.485, 0.456, 0.406]
---channel_stds, Channel standard deviation to normalise around, default is the imagenet channel std i.e. [0.229, 0.224, 0.225]
---batch_size, Batch size to infer on, defaults to architecture determined batch size
---num_workers, Number of CPU workers
-
-Thresholds:
---qc_threshold, Threshold of model output to consider as positive for target classes, default is 0.99 as determined by the paper
---tff3_threshold, Threshold of model output to consider as positive for target classes, default is 0.93 as determined by the paper
---tile_cutoff, Threshold number of tiles to consider as positive, default is 6 as determined in the paper
-
-Atypia classes to consider (i.e. H&E slides):
---dysplasia_separate, Flag whether to separate the atypia of uncertain significance and dysplasia
---respiratory_separate, Flag whether to separate the respiratory mucosa cilia and respiratory mucosa
---gastric_separate, Flag whether to separate the tickled up columnar and gastric cardia
---atypia_separate, lag whether to perform the following class split: atypia of uncertain significance+dysplasia, respiratory mucosa cilia+respiratory mucosa, tickled up columnar+gastric cardia classes, artifact+other
-
-Specify script outputs:
---output, Path to save outputs to
---csv, Flag to save data as CSV file including tile counts
---stats, Flag to produce Precision-Recall plot
---xml, Flag to produce model outputs as annotation files in .xml (ASAP) format
---json, Flag to produce model outputs as annotation files in .geojson (QuPath) format
---vis, Flag to dsiplay the output of the model as a heatmap of areas to analyse
---thumbnail, Flag to save the vis thumbnail, vis must also be active -->
-```
-</details>
-
-If you use any of the work published in this paper please consider citing us using the reference below:
+Atypia and P53 detection:
 ```
 @article{pilonis2022use,
   title={Use of a Cytosponge biomarker panel to prioritise endoscopic Barrett's oesophagus surveillance: a cross-sectional study followed by a real-world prospective pilot},

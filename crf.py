@@ -1,15 +1,19 @@
+import os
+import time
 import pandas as pd
+import shutil
 
-# Path to the directory containing the images
-qc_path = '/media/prew01/BEST/BEST4/surveillance/data/he/40x_400/qc/process_list.csv'
-atypia_path = '/media/prew01/BEST/BEST4/surveillance/data/he/40x_400/process_list.csv'
-p53_path = '/media/prew01/BEST/BEST4/surveillance/data/p53/40x_400/process_list.csv'
-tff3_path = '/media/prew01/BEST/BEST4/surveillance/data/tff3/40x_400/process_list.csv'
+date = time.strftime('%d%m%y')
 
-print(f'Loading data from \n{qc_path} \n{atypia_path} \n{p53_path} \n{tff3_path}')
+# Path to the directory containing the results
+base_path = '/media/prew01/BEST/BEST4/surveillance/'
+# Output directory for the combined results
+output_dir = '/media/prew01/BEST/BEST4/surveillance/results/'
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir, exist_ok=True)
 
 # Load the data
-qc = pd.read_csv(qc_path)
+qc = pd.read_csv(os.path.join(base_path, f'he/results/qc_process_list_{date}.csv'))
 #Remap Column Names
 qc_column_mapping = {
     'slide_filename': 'h_e_slide_filename',
@@ -20,7 +24,7 @@ qc_column_mapping = {
 }
 qc = qc.rename(columns=qc_column_mapping)
 
-atypia = pd.read_csv(atypia_path)
+atypia = pd.read_csv(os.path.join(base_path, f'he/results/atypia_process_list_{date}.csv'))
 atypia_column_mapping = {
     'slide_filename': 'h_e_slide_filename',
     'positive_tiles': 'atypia_positive_tiles',
@@ -30,7 +34,7 @@ atypia_column_mapping = {
 }
 atypia = atypia.rename(columns=atypia_column_mapping)
 
-p53 = pd.read_csv(p53_path)
+p53 = pd.read_csv(os.path.join(base_path, f'p53/results/p53_process_list_{date}.csv'))
 p53_column_mapping = {
     'slide_filename': 'p53_slide_filename',
     'positive_tiles': 'p53_positive_tiles',
@@ -40,7 +44,7 @@ p53_column_mapping = {
 }
 p53 = p53.rename(columns=p53_column_mapping)
 
-tff3 = pd.read_csv(tff3_path)
+tff3 = pd.read_csv(os.path.join(base_path, f'tff3/results/tff3_process_list_{date}.csv'))
 tff3_column_mapping = {
     'slide_filename': 'tff3_slide_filename',
     'positive_tiles': 'tff3_positive_tiles',
@@ -51,7 +55,7 @@ tff3_column_mapping = {
 tff3 = tff3.rename(columns=tff3_column_mapping)
 
 # Step 1: Initialize DataFrame for mapping ids
-record_ids = pd.read_csv('/media/prew01/BEST/BEST4/BarrettsOESophagusTr-InformationForMachin_DATA_2024-07-10_1629.csv')
+record_ids = pd.read_csv('/media/prew01/BEST/BEST4/surveillance/data/BarrettsOESophagusTr-InformationForMachin_DATA_2024-07-23_1205.csv')
 record_ids = record_ids.dropna(subset=['cypath_lab_nmb'])
 record_ids['redcap_event_name'] = 'unscheduled_arm_1'
 record_ids['redcap_repeat_instrument'] = 'machine_learning_pathology_results'
@@ -93,8 +97,22 @@ appended_df.insert(1, 'redcap_repeat_instance', repeat)
 # Sort the DataFrame by record_id and redcap_repeat_instance
 appended_df.sort_values(by=['record_id', 'redcap_repeat_instance'], inplace=True)
 
-output_path = '/media/prew01/BEST/BEST4/surveillance/BEST4_AI_crfs.csv'
+output_path = os.path.join(output_dir, f'BEST4_AI_crfs_{date}.csv')
 print(f'Saving appended data to {output_path}')
 appended_df.to_csv(output_path, index=False)  # Save the appended data to a CSV file
 
+import ipdb; ipdb.set_trace()
+for case, row in appended_df.iterrows():
+    best4_case_id = row['record_id']
+    case_dir = os.path.join(output_dir, best4_case_id)
+    os.makedirs(case_dir, exist_ok=True)
+
+    # Save the individual results to the case directory
+    shutil.copytree(os.path.join(base_path, f'he/results/{row["h_e_slide_filename"]}'), f'{case_dir}/{row["h_e_slide_filename"]}')
+    shutil.copytree(os.path.join(base_path, f'p53/results/{row["p53_slide_filename"]}'), f'{case_dir}/{row["p53_slide_filename"]}')
+    shutil.copytree(os.path.join(base_path, f'tff3/results/{row["tff3_slide_filename"]}'), f'{case_dir}/{row["tff3_slide_filename"]}')
+
+    #zip the case directory and save to the output directory and delete the case directory
+    shutil.make_archive(os.path.join(output_dir, best4_case_id), 'zip', os.path.join(output_dir, best4_case_id))
+    shutil.rmtree(case_dir)
 
