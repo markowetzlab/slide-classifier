@@ -15,7 +15,6 @@ import torch.nn as nn
 import xmltodict
 from monai.data import (CSVDataset, DataLoader, OpenSlideWSIReader,
                         PatchWSIDataset)
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from torchvision import models
@@ -138,13 +137,6 @@ if __name__ == '__main__':
         trained_model.classifier[6] = nn.Linear(4096, len(classes))
         trained_model.load_state_dict(torch.load(args.model_path).module.state_dict())
         
-        # Modify the model to use the updated GELU activation function in later PyTorch versions 
-        for name, module in trained_model.named_modules():
-            if isinstance(module, nn.GELU):
-                exec('trained_model.'+torchmodify(name)+'=nn.GELU()')   
-            else:
-                raise AssertionError(f'stain type must be he/qc, tff3, or p53 but received {str(args.stain)}.')
-            
     elif args.stain == 'p53':
         file_name = 'P53'
         gt_label = 'P53 positive'
@@ -188,12 +180,13 @@ if __name__ == '__main__':
         trained_model.classifier[6] = nn.Linear(4096, len(classes))
         trained_model.load_state_dict(torch.load(args.model_path).module.state_dict())
         
-        # Modify the model to use the updated GELU activation function in later PyTorch versions 
-        for name, module in trained_model.named_modules():
-            if isinstance(module, nn.GELU):
-                exec('trained_model.'+torchmodify(name)+'=nn.GELU()')
     else:
         raise AssertionError(f'stain type must be he/qc, tff3, or p53 but received {str(args.stain)}.')
+
+    # Modify the model to use the updated GELU activation function in later PyTorch versions 
+    for name, module in trained_model.named_modules():
+        if isinstance(module, nn.GELU):
+            exec('trained_model.'+torchmodify(name)+'=nn.GELU()')
 
     if args.stain == 'he' or args.stain =='p53':
         channel_means = [0.7747305964175918, 0.7421753839460998, 0.7307385516144509]
@@ -297,8 +290,8 @@ if __name__ == '__main__':
             predictions = pd.read_csv(tile_inference)
         else:
             # copy mask file to output directory for reference
-            destination_file = mask_file.replace(input_directories['mask_dir'], output_dir)
-            destination_file = destination_file.replace(slide_stem, 'mask')
+            destination_file = mask_file.replace(slide_stem, 'mask')
+            destination_file = destination_file.replace(input_directories['mask_dir'], output_dir)
             shutil.copy2(mask_file, destination_file)
             print(f'File copied from {mask_file} to {destination_file}')
             
