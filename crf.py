@@ -101,7 +101,6 @@ output_path = os.path.join(output_dir, f'BEST4_AI_crfs_{date}.csv')
 print(f'Saving appended data to {output_path}')
 appended_df.to_csv(output_path, index=False)  # Save the appended data to a CSV file
 
-import ipdb; ipdb.set_trace()
 for case, row in appended_df.iterrows():
     best4_case_id = row['record_id']
     case_dir = os.path.join(output_dir, best4_case_id)

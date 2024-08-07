@@ -3,25 +3,23 @@ import argparse
 import os
 import shutil
 import time
+import warnings
+
+import geojson
 import h5py
+import monai.transforms as mt
 import numpy as np
 import pandas as pd
-import geojson
-import xmltodict
-
-from tqdm import tqdm
-
 import torch
 import torch.nn as nn
+import xmltodict
+from monai.data import (CSVDataset, DataLoader, OpenSlideWSIReader,
+                        PatchWSIDataset)
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-from monai.data import DataLoader, CSVDataset, PatchWSIDataset, OpenSlideWSIReader
-import monai.transforms as mt
+from torchvision import models
 
-from dataset_processing import class_parser
-from models import get_network
-
-import warnings
 warnings.filterwarnings('ignore')
 
 def parse_args():
@@ -36,7 +34,6 @@ def parse_args():
     parser.add_argument("--reader", default='openslide', help="monai slide backend reader ('openslide' or 'cuCIM')")
 
     #model path and parameters
-    parser.add_argument("--network", default='vgg_16', help="DL architecture to use")
     parser.add_argument("--model_path", required=True, help="path to stored model weights")
 
     #preprocessed patch locations and parameters
@@ -86,7 +83,6 @@ if __name__ == '__main__':
     args = parse_args()
     
     model_ver = os.path.splitext(os.path.basename(args.model_path))[0]
-    network = args.network
     reader = args.reader
 
     input_directories = {'slide_dir': args.slide_path,
@@ -100,7 +96,7 @@ if __name__ == '__main__':
     if args.stain == 'he':
         file_name = 'H&E'
         gt_label = 'Atypia'
-        classes = class_parser('he', args.dysplasia_separate, args.respiratory_separate, args.gastric_separate, args.atypia_separate, args.p53_separate)
+        classes = ['artifact', 'atypia', 'background', 'gastric_cardia', 'immune_cells', 'intestinal_metaplasia', 'respiratory_mucosa', 'squamous_mucosa']
         if args.ranked_class is not None:
             ranked_class = args.ranked_class
         else:
@@ -115,8 +111,10 @@ if __name__ == '__main__':
             hcp_threshold = args.hcp_cutoff
         else:
             hcp_threshold = 10
-        channel_means = [0.7747305964175918, 0.7421753839460998, 0.7307385516144509]
-        channel_stds = [0.2105364799974944, 0.2123423033814637, 0.20617556948731974]
+        trained_model = models.vit_l_16(pretrained=False)
+        trained_model.heads[-1] = nn.Linear(1024, len(classes))
+        trained_model = torch.load(args.model_path)
+
     elif args.stain == 'qc':
         file_name = 'H&E'
         gt_label = 'QC Report'
@@ -135,12 +133,22 @@ if __name__ == '__main__':
             hcp_threshold = args.hcp_cutoff
         else:
             hcp_threshold = 95
-        channel_means = [0.485, 0.456, 0.406]
-        channel_stds = [0.229, 0.224, 0.225]
+        
+        trained_model = models.vgg16(pretrained=False)
+        trained_model.classifier[6] = nn.Linear(4096, len(classes))
+        trained_model.load_state_dict(torch.load(args.model_path).module.state_dict())
+        
+        # Modify the model to use the updated GELU activation function in later PyTorch versions 
+        for name, module in trained_model.named_modules():
+            if isinstance(module, nn.GELU):
+                exec('trained_model.'+torchmodify(name)+'=nn.GELU()')   
+            else:
+                raise AssertionError(f'stain type must be he/qc, tff3, or p53 but received {str(args.stain)}.')
+            
     elif args.stain == 'p53':
         file_name = 'P53'
         gt_label = 'P53 positive'
-        classes = class_parser('p53', args.p53_separate)
+        classes = ['aberrant_positive_columnar', 'artifact', 'background', 'immune_cells', 'squamous_mucosa', 'wild_type_columnar']
         if args.ranked_class is not None:
             ranked_class = args.ranked_class
         else:
@@ -155,14 +163,16 @@ if __name__ == '__main__':
             hcp_threshold = args.hcp_cutoff
         else:
             hcp_threshold = 2
-        channel_means = [0.7747305964175918, 0.7421753839460998, 0.7307385516144509]
-        channel_stds = [0.2105364799974944, 0.2123423033814637, 0.20617556948731974]
+        
+        trained_model = models.convnext_large(pretrained=False)
+        trained_model.classifier[1] = nn.Linear(1536, len(classes))
+        trained_model = torch.load(args.model_path)
+
     elif args.stain == 'tff3':
         file_name = 'TFF3'
         gt_label = 'TFF3 positive'
         classes = ['Equivocal', 'Negative', 'Positive']
         ranked_class = 'Positive'
-        secondary_class = 'Equivocal'
         thresh = args.tff3_threshold
         mapping = {'Y': 1, 'N': 0}
         if args.lcp_cutoff is not None:
@@ -173,34 +183,38 @@ if __name__ == '__main__':
             hcp_threshold = args.hcp_cutoff
         else:
             hcp_threshold = 40
+        
+        trained_model = models.vgg16(pretrained=False)
+        trained_model.classifier[6] = nn.Linear(4096, len(classes))
+        trained_model.load_state_dict(torch.load(args.model_path).module.state_dict())
+        
+        # Modify the model to use the updated GELU activation function in later PyTorch versions 
+        for name, module in trained_model.named_modules():
+            if isinstance(module, nn.GELU):
+                exec('trained_model.'+torchmodify(name)+'=nn.GELU()')
+    else:
+        raise AssertionError(f'stain type must be he/qc, tff3, or p53 but received {str(args.stain)}.')
+
+    if args.stain == 'he' or args.stain =='p53':
+        channel_means = [0.7747305964175918, 0.7421753839460998, 0.7307385516144509]
+        channel_stds = [0.2105364799974944, 0.2123423033814637, 0.20617556948731974]
+    elif args.stain == 'tff3' or args.stain == 'qc':
         channel_means = [0.485, 0.456, 0.406]
         channel_stds = [0.229, 0.224, 0.225]
     else:
         raise AssertionError(f'stain type must be he/qc, tff3, or p53 but received {str(args.stain)}.')
-
     print('Channel Means: ', channel_means, '\nChannel Stds: ', channel_stds)
-
-    trained_model, model_params = get_network(network, class_names=classes, pretrained=False)
-    try:
-        trained_model.load_state_dict(torch.load(args.model_path).module.state_dict())
-    except: 
-        trained_model = torch.load(args.model_path)
     
-    # Modify the model to use the updated GELU activation function in later PyTorch versions 
-    for name, module in trained_model.named_modules():
-        if isinstance(module, nn.GELU):
-            exec('trained_model.'+torchmodify(name)+'=nn.GELU()')
-
     # Use manual batch size if one has been specified
     if args.batch_size is not None:
         batch_size = args.batch_size
     else:
-        batch_size = model_params['batch_size']
+        batch_size = 32
     
     if args.input_size is not None:
         input_size = args.patch_size
     else:
-        input_size = model_params['patch_size']
+        input_size = 224
     
     if torch.cuda.is_available() and (torch.version.hip or torch.version.cuda):
         if torch.cuda.device_count() > 1:
@@ -534,3 +548,6 @@ if __name__ == '__main__':
     print(f'Number of HCP slides: {(df["algorithm_result"] == 3).sum()}')
     print(f'Number of LCP slides: {(df["algorithm_result"] == 2).sum()}')
     print(f'Number of Negative slides: {(df["algorithm_result"] == 1).sum()}')
+
+#TODO implement MONAI version of Metrics Reloaded
+#https://github.com/Project-MONAI/MetricsReloaded
