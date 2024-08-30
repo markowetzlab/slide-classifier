@@ -326,9 +326,15 @@ class WholeSlideImage(object):
         areas = [np.sum(i) for i in bounding_masks]
         sorted_indices = np.argsort(areas)[::-1]
 
+        #exclude_ids = [0,7,9]
+        if len(keep_ids) > 0:
+            sorted_indices = set(keep_ids) - set(exclude_ids)
+        else:
+            sorted_indices = set(np.arange(len(sorted_indices))) - set(exclude_ids)
+
         bounding_masks = [bounding_masks[i] for i in sorted_indices]
-        mask = np.maximum.reduce([full_masks[i] for i in sorted_indices][:filter_params['max_bboxes']])
-        
+        mask = np.maximum.reduce([full_masks[i] for i in sorted_indices])
+
         if invert:
             mask = cv2.bitwise_or(mask)
 
@@ -346,14 +352,8 @@ class WholeSlideImage(object):
         self.contours_tissue = self.scaleContourDim(foreground_contours, scale)
         self.holes_tissue = self.scaleHolesDim(hole_contours, scale)
 
-        #exclude_ids = [0,7,9]
-        if len(keep_ids) > 0:
-            contour_ids = set(keep_ids) - set(exclude_ids)
-        else:
-            contour_ids = set(np.arange(len(self.contours_tissue))) - set(exclude_ids)
-
-        self.contours_tissue = [self.contours_tissue[i] for i in contour_ids]
-        self.holes_tissue = [self.holes_tissue[i] for i in contour_ids]
+        # self.contours_tissue = [self.contours_tissue[i] for i in contour_ids]
+        # self.holes_tissue = [self.holes_tissue[i] for i in contour_ids]
 
     def visWSI(self, vis_level=0, color = (0,255,0), hole_color = (0,0,255), annot_color=(255,0,0), 
                     line_thickness=250, max_size=None, top_left=None, bot_right=None, custom_downsample=1, view_slide_only=False,

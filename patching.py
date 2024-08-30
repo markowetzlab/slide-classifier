@@ -49,7 +49,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 				  patch_size = 256, step_size = 256, 
 				  seg_params = {'seg_level': -1, 'sthresh': 8, 'mthresh': 7, 'close': 4, 'use_otsu': False,
 				  'keep_ids': 'none', 'exclude_ids': 'none', 'based_on': 'hed'},
-				  filter_params = {'min_pixel_count':25, 'a_t':100, 'a_h': 16, 'max_n_holes':8, 'max_bboxes':2, 'max_dist':200}, 
+				  filter_params = {'min_pixel_count':25, 'a_t':100, 'a_h': 16, 'max_n_holes':8, 'max_dist':200}, 
 				  vis_params = {'vis_level': -1, 'line_thickness': 500},
 				  patch_params = {'use_padding': True, 'contour_fn': 'four_pt'},
 				  patch_level = 0,
@@ -87,7 +87,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 	date = time.strftime('%d%m%y')
 
 	for i in range(total):
-		df.to_csv(os.path.join(save_dir, 'process_list_'+{str(date)}+'.csv'), index=False)
+		df.to_csv(os.path.join(save_dir, f'process_list_{str(date)}.csv'), index=False)
 		idx = process_stack.index[i]
 		slide = process_stack.loc[idx, 'slide_id']
 		print("\n\nprogress: {:.2f}, {}/{}".format(i/total, i, total))
@@ -162,6 +162,9 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 		if keep_ids != 'none' and len(keep_ids) > 0:
 			str_ids = current_seg_params['keep_ids']
 			current_seg_params['keep_ids'] = np.array(str_ids.split(',')).astype(int)
+		elif keep_ids != 'none' and len(keep_ids) == 0:
+			str_ids = current_seg_params['keep_ids']
+			current_seg_params['keep_ids'] = np.array([str_ids]).astype(int)
 		else:
 			current_seg_params['keep_ids'] = []
 
@@ -169,6 +172,9 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 		if exclude_ids != 'none' and len(exclude_ids) > 0:
 			str_ids = current_seg_params['exclude_ids']
 			current_seg_params['exclude_ids'] = np.array(str_ids.split(',')).astype(int)
+		elif exclude_ids != 'none' and len(exclude_ids) == 0:
+			str_ids = current_seg_params['exclude_ids']
+			current_seg_params['exclude_ids'] = np.array([str_ids]).astype(int)
 		else:
 			current_seg_params['exclude_ids'] = []
 
@@ -217,7 +223,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 	patch_times /= total
 	stitch_times /= total
 
-	df.to_csv(os.path.join(save_dir, 'process_list_'+{str(date)}+'.csv'), index=False)
+	df.to_csv(os.path.join(save_dir, f'process_list_{str(date)}.csv'), index=False)
 	print("average segmentation time in s per slide: {}".format(seg_times))
 	print("average filter_paramspatching time in s per slide: {}".format(patch_times))
 	print("average stiching time in s per slide: {}".format(stitch_times))
@@ -234,7 +240,8 @@ parser.add_argument('--patch_size', type = int, default=256,
 parser.add_argument('--patch', default=False, action='store_true')
 parser.add_argument('--seg', default=False, action='store_true')
 parser.add_argument('--base', default='hed', type=str, help='segmentation based on colour space (hed, gray)}')
-parser.add_argument('--max_bbox', type=int, default=-1, help='maximum number of bounding boxes')
+parser.add_argument('--keep_ids', default='none', type=str, help='ids to keep , e.g. [1, 6, 8]')
+parser.add_argument('--exclude_ids', default='none', type=str, help='ids to exclude e.g. [0, 7, 9]')
 parser.add_argument('--stitch', default=False, action='store_true')
 parser.add_argument('--no_auto_skip', default=True, action='store_false')
 parser.add_argument('--save_dir', type = str,
@@ -275,8 +282,8 @@ if __name__ == '__main__':
 		if key not in ['source']:
 			os.makedirs(val, exist_ok=True)
 
-	seg_params = {'seg_level': -1, 'based_on': args.base, 'contrast': 1, 'keep_ids': 'none', 'exclude_ids': 'none'}
-	filter_params = {'min_pixel_count':25, 'a_t':20, 'a_h': 16, 'max_n_holes':2, 'max_dist':200, 'max_bboxes':args.max_bbox}
+	seg_params = {'seg_level': -1, 'based_on': args.base, 'contrast': 1, 'keep_ids': args.keep_ids, 'exclude_ids':args.exclude_ids}
+	filter_params = {'min_pixel_count':25, 'a_t':20, 'a_h': 16, 'max_n_holes':2, 'max_dist':200}
 	vis_params = {'vis_level': -1, 'line_thickness': 250}
 	patch_params = {'use_padding': True, 'contour_fn': 'four_pt'}
 

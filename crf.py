@@ -13,7 +13,7 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
 # Load the data
-qc = pd.read_csv(os.path.join(base_path, f'he/results/qc_process_list_{date}.csv'))
+qc = pd.read_csv(os.path.join(base_path, f'he/40x_400/results/qc_process_list_{date}.csv'))
 #Remap Column Names
 qc_column_mapping = {
     'slide_filename': 'h_e_slide_filename',
@@ -24,7 +24,7 @@ qc_column_mapping = {
 }
 qc = qc.rename(columns=qc_column_mapping)
 
-atypia = pd.read_csv(os.path.join(base_path, f'he/results/atypia_process_list_{date}.csv'))
+atypia = pd.read_csv(os.path.join(base_path, f'he/40x_400/results/he_process_list_{date}.csv'))
 atypia_column_mapping = {
     'slide_filename': 'h_e_slide_filename',
     'positive_tiles': 'atypia_positive_tiles',
@@ -34,7 +34,7 @@ atypia_column_mapping = {
 }
 atypia = atypia.rename(columns=atypia_column_mapping)
 
-p53 = pd.read_csv(os.path.join(base_path, f'p53/results/p53_process_list_{date}.csv'))
+p53 = pd.read_csv(os.path.join(base_path, f'p53/40x_400/results/p53_process_list_{date}.csv'))
 p53_column_mapping = {
     'slide_filename': 'p53_slide_filename',
     'positive_tiles': 'p53_positive_tiles',
@@ -44,7 +44,7 @@ p53_column_mapping = {
 }
 p53 = p53.rename(columns=p53_column_mapping)
 
-tff3 = pd.read_csv(os.path.join(base_path, f'tff3/results/tff3_process_list_{date}.csv'))
+tff3 = pd.read_csv(os.path.join(base_path, f'tff3/40x_400/results/tff3_process_list_{date}.csv'))
 tff3_column_mapping = {
     'slide_filename': 'tff3_slide_filename',
     'positive_tiles': 'tff3_positive_tiles',
@@ -103,15 +103,17 @@ appended_df.to_csv(output_path, index=False)  # Save the appended data to a CSV 
 
 for case, row in appended_df.iterrows():
     best4_case_id = row['record_id']
-    case_dir = os.path.join(output_dir, best4_case_id)
+    repeat = row["redcap_repeat_instance"]
+    instance = f'{best4_case_id}-{repeat}'
+    case_dir = os.path.join(output_dir, instance)
     os.makedirs(case_dir, exist_ok=True)
 
     # Save the individual results to the case directory
-    shutil.copytree(os.path.join(base_path, f'he/results/{row["h_e_slide_filename"]}'), f'{case_dir}/{row["h_e_slide_filename"]}')
-    shutil.copytree(os.path.join(base_path, f'p53/results/{row["p53_slide_filename"]}'), f'{case_dir}/{row["p53_slide_filename"]}')
-    shutil.copytree(os.path.join(base_path, f'tff3/results/{row["tff3_slide_filename"]}'), f'{case_dir}/{row["tff3_slide_filename"]}')
+    shutil.copytree(os.path.join(base_path, f'he/40x_400/results/{row["h_e_slide_filename"]}'), f'{case_dir}/{row["h_e_slide_filename"]}')
+    shutil.copytree(os.path.join(base_path, f'p53/40x_400/results/{row["p53_slide_filename"]}'), f'{case_dir}/{row["p53_slide_filename"]}')
+    shutil.copytree(os.path.join(base_path, f'tff3/40x_400/results/{row["tff3_slide_filename"]}'), f'{case_dir}/{row["tff3_slide_filename"]}')
 
     #zip the case directory and save to the output directory and delete the case directory
-    shutil.make_archive(os.path.join(output_dir, best4_case_id), 'zip', os.path.join(output_dir, best4_case_id))
+    shutil.make_archive(os.path.join(output_dir, instance), 'zip', os.path.join(output_dir, instance))
     shutil.rmtree(case_dir)
 

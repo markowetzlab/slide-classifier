@@ -123,7 +123,7 @@ if __name__ == '__main__':
             ranked_class = args.ranked_class
         else:
             ranked_class = 'Gastric-type columnar epithelium'
-        thresh = args.he_threshold
+        thresh = args.qc_threshold
         if args.lcp_cutoff is not None:
             lcp_threshold = args.lcp_cutoff
         else:
@@ -492,7 +492,6 @@ if __name__ == '__main__':
             if args.images:
                 if len(positive) == 0:
                     print(f'\rNo annotations found above current threshold for {slide_stem}')
-                    #produce the top 5 tiles that would otherwise be classed as negative for reference
                 else:
                     reader = OpenSlideWSIReader(level=patch_level)
                     slide = reader.read(wsi_path)
@@ -520,17 +519,16 @@ if __name__ == '__main__':
                         tile_image = slide.read_region((new_x, new_y), patch_level, (new_w, new_h))
                         tile_image = tile_image.convert('RGB')
                         tile_image.save(os.path.join(slide_images, f'{status}_{str(round(tile[ranked_class], 4))}_{str(int(tile["x_min"]))}_{str(int(tile["y_min"]))}.png'))
+                        #produce the top 5 tiles that would otherwise be classed as negative for reference
                         if tiles == 5:
                             break
                 
-                # shutil.make_archive(slide_images , 'zip', slide_images)
-
         record = {
             'algorithm_cyted_sample_id': case,
             'slide_filename': slide_stem,
             'positive_tiles': positive_tiles,
             'algorithm_result': algorithm_result,
-            'tile_mapping': annotation_path,
+            'tile_mapping': os.path.basename(annotation_path) if annotation_path else None,
             'algorithm_version': model_ver,
         }
         records.append(record)
