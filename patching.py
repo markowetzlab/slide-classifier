@@ -84,7 +84,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 	seg_times = 0.
 	patch_times = 0.
 	stitch_times = 0.
-	date = time.strftime('%d%m%y')
+	date = time.strftime('%Y%m%d')
 
 	for i in range(total):
 		df.to_csv(os.path.join(save_dir, f'process_list_{str(date)}.csv'), index=False)
@@ -262,7 +262,6 @@ if __name__ == '__main__':
 
 	if args.process_list:
 		process_list = os.path.join(args.save_dir, args.process_list)
-
 	else:
 		process_list = None
 
@@ -283,7 +282,7 @@ if __name__ == '__main__':
 			os.makedirs(val, exist_ok=True)
 
 	seg_params = {'seg_level': -1, 'based_on': args.base, 'contrast': 1, 'keep_ids': args.keep_ids, 'exclude_ids':args.exclude_ids}
-	filter_params = {'min_pixel_count':25, 'a_t':20, 'a_h': 16, 'max_n_holes':2, 'max_dist':200}
+	filter_params = {'min_pixel_count':25, 'a_t':20, 'a_h': 16, 'max_n_holes':2, 'max_dist':250}
 	vis_params = {'vis_level': -1, 'line_thickness': 250}
 	patch_params = {'use_padding': True, 'contour_fn': 'four_pt'}
 

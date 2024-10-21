@@ -136,7 +136,7 @@ if __name__ == '__main__':
         trained_model = models.vgg16(pretrained=False)
         trained_model.classifier[6] = nn.Linear(4096, len(classes))
         trained_model.load_state_dict(torch.load(args.model_path).module.state_dict())
-        
+      
     elif args.stain == 'p53':
         file_name = 'P53'
         gt_label = 'P53 positive'
@@ -179,7 +179,7 @@ if __name__ == '__main__':
         trained_model = models.vgg16(pretrained=False)
         trained_model.classifier[6] = nn.Linear(4096, len(classes))
         trained_model.load_state_dict(torch.load(args.model_path).module.state_dict())
-        
+      
     else:
         raise AssertionError(f'stain type must be he/qc, tff3, or p53 but received {str(args.stain)}.')
 
@@ -519,7 +519,7 @@ if __name__ == '__main__':
                         tile_image = slide.read_region((new_x, new_y), patch_level, (new_w, new_h))
                         tile_image = tile_image.convert('RGB')
                         tile_image.save(os.path.join(slide_images, f'{status}_{str(round(tile[ranked_class], 4))}_{str(int(tile["x_min"]))}_{str(int(tile["y_min"]))}.png'))
-                        #produce the top 5 tiles that would otherwise be classed as negative for reference
+                        #produce the top 5 tiles for reference
                         if tiles == 5:
                             break
                 
@@ -534,7 +534,7 @@ if __name__ == '__main__':
         records.append(record)
 
     df = pd.DataFrame.from_dict(records)
-    date = time.strftime('%d%m%y')
+    date = time.strftime('%y%m%d')
     df.to_csv(os.path.join(args.save_dir, args.stain+f'_process_list_{date}.csv'), index=False)
     print(f'Number of HCP slides: {(df["algorithm_result"] == 3).sum()}')
     print(f'Number of LCP slides: {(df["algorithm_result"] == 2).sum()}')

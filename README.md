@@ -57,12 +57,12 @@ Example usage of this file for H&E images is as follows, which transforms the sl
 python patching.py --source <slide_dir> --save_dir <patch_dir> --patch_size 400 --patch_level 0 --step_size 400 --seg --patch --stitch
 ```
 
-For IHC images, this script can be modified to remove certain pieces of tissue, for example filtering for only the largest bounding boxes, and segmenting via a grayscale colour space.
+For IHC images, this script can be modified to remove certain pieces of tissue, for example filtering for only the largest bounding boxes (via --keep_ids or --exclude_ids), and segmenting via a grayscale colour space.
 
 You can also specify a list of slides to process with either a txt file or csv file (assuming the slide column is labelled as slide_id).
 
 ```
-python patching.py --source <slide_dir> --save_dir <patch_dir> --patch_size 400 --patch_level 0 --step_size 400 --seg --patch --stitch --max_bbox 2 --process_list slides.txt
+python patching.py --source <slide_dir> --save_dir <patch_dir> --patch_size 400 --patch_level 0 --step_size 400 --seg --patch --stitch --keep_ids 0,1 --process_list slides.csv
 ```
 
 A fill list of arguments can be found by runningL
