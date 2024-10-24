@@ -3,7 +3,8 @@ import time
 import pandas as pd
 import shutil
 
-date = time.strftime('%y%m07')
+# Get the current date in the format YYMMDD
+date = time.strftime('%y%m%d')
 
 # Path to the directory containing the results
 base_path = '/media/prew01/BEST/BEST4/surveillance/'
@@ -14,7 +15,7 @@ if not os.path.exists(output_dir):
 
 # Load the data
 qc = pd.read_csv(os.path.join(base_path, f'he/features/40x_400/results/qc_process_list_{date}.csv'))
-#Remap Column Names
+# Remap Column Names
 qc_column_mapping = {
     'slide_filename': 'h_e_slide_filename',
     'positive_tiles': 'he_numb_gastric_tile_alg',
@@ -48,7 +49,7 @@ tff3 = pd.read_csv(os.path.join(base_path, f'tff3/features/40x_400/results/tff3_
 tff3_column_mapping = {
     'slide_filename': 'tff3_slide_filename',
     'positive_tiles': 'tff3_positive_tiles',
-    'algorithm_result': 'tf3_algorithm_result',
+    'algorithm_result': 'tff3_algorithm_result',
     'tile_mapping': 'tff3_tile_mapping',
     'algorithm_version': 'tff3_algorithm_version'
 }
@@ -62,19 +63,19 @@ participant_ids = dict(zip(record_ids['Cyted Lab Number (Format: YYCYT#####)'], 
 repeat_record_ids = record_ids.dropna(subset=['Cyted Lab Number (Format: YYCYT#####).1'])
 repeat_participant_ids = dict(zip(repeat_record_ids['Cyted Lab Number (Format: YYCYT#####).1'], repeat_record_ids['Participant ID:  ']))
 
-appended_df = pd.DataFrame(columns=['record_id', 'redcap_event_name', 'redcap_repeat_instrument', 'redcap_repeat_instance'])
-
+columns=['record_id', 'redcap_event_name', 'redcap_repeat_instrument', 'redcap_repeat_instance']
 # Step 2: List of DataFrames to append
 dfs = [qc, atypia, p53, tff3]
 
-# Step 3: Iterate through DataFrames and append only unique columns
-for df in dfs:
-    # Identify unique columns in the current DataFrame that are not in appended_df
-    unique_cols = [col for col in df.columns if col not in appended_df.columns]
-    # Select only the unique columns for appending
-    df_unique = df[unique_cols]
-    # Append the DataFrame with only the unique columns
-    appended_df = pd.concat([appended_df, df_unique], axis=1)
+# Step 3: Merge all the DataFrames on 'algorithm_cyted_sample_id'
+
+#merge the first two dataframes on 'algorithm_cyted_sample_id' but maintain column order
+appended_df = pd.merge(qc, atypia, left_on='algorithm_cyted_sample_id', right_on='algorithm_cyted_sample_id', how='outer', suffixes=(None, '_atypia'))
+appended_df = pd.merge(appended_df, p53, left_on='algorithm_cyted_sample_id', right_on='algorithm_cyted_sample_id', how='outer')
+appended_df = pd.merge(appended_df, tff3, left_on='algorithm_cyted_sample_id', right_on='algorithm_cyted_sample_id', how='outer')
+
+#add columns as the first 4 columns of the appended_df
+appended_df = appended_df.reindex(columns=columns + appended_df.columns.tolist())
 
 # Step 4: Iterate through the appended_df and record_ids to match the record_id
 not_found_cases = []
@@ -102,7 +103,7 @@ appended_df['redcap_repeat_instrument'] = 'machine_learning_pathology_results'
 appended_df.sort_values(by=['record_id', 'redcap_repeat_instance'], inplace=True)
 
 output_path = os.path.join(output_dir, f'BEST4_AI_crfs_{date}.csv')
-print(f'Saving appended data to {output_dir}')
+print(f'Saving appended data to {output_path}')
 appended_df.to_csv(output_path, index=False)  # Save the appended data to a CSV file
 
 for case, row in appended_df.iterrows():
@@ -112,7 +113,10 @@ for case, row in appended_df.iterrows():
     repeat = row["redcap_repeat_instance"]
     instance = f'{best4_case_id}-{repeat}'
     case_dir = os.path.join(output_dir, instance)
-    os.makedirs(case_dir, exist_ok=True)
+    if not os.path.exists(case_dir):
+        os.makedirs(case_dir, exist_ok=True)
+    else:
+        continue
 
     # Save the individual results to the case directory
     shutil.copytree(os.path.join(base_path, f'he/features/40x_400/results/{row["h_e_slide_filename"]}'), f'{case_dir}/{row["h_e_slide_filename"]}')
