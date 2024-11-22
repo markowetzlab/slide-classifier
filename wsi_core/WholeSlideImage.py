@@ -108,7 +108,56 @@ class WholeSlideImage(object):
         # self.holes_tissue = asset_dict['holes']
         self.contours_tissue = asset_dict['tissue']
 
-    def initBinaryMask(self, mask_file, seg_level=0):
+    def initBinaryMask(self, mask_file, seg_level=0, ref_patch_size=512,
+                       filter_params={'min_pixel_count':20, 'a_t':2, 'a_h': 1, 'max_n_holes':8, 'max_bboxes':2, 'max_dist':250}):
+        
+        def _filter_contours(contours, hierarchy, filter_params):
+            """
+                Filter contours by: area.
+            """
+            filtered = []
+
+            # find indices of foreground contours (parent == -1)
+            hierarchy_1 = np.flatnonzero(hierarchy[:,1] == -1)
+            all_holes = []
+            
+            # loop through foreground contour indices
+            for cont_idx in hierarchy_1:
+                # actual contour
+                cont = contours[cont_idx]
+                # indices of holes contained in this contour (children of parent contour)
+                holes = np.flatnonzero(hierarchy[:, 1] == cont_idx)
+                # take contour area (includes holes)
+                a = cv2.contourArea(cont)
+                # calculate the contour area of each hole
+                hole_areas = [cv2.contourArea(contours[hole_idx]) for hole_idx in holes]
+                # actual area of foreground contour region
+                a = a - np.array(hole_areas).sum()
+                if a == 0: continue
+                if tuple((filter_params['a_t'],)) < tuple((a,)): 
+                    filtered.append(cont_idx)
+                    all_holes.append(holes)
+
+            foreground_contours = [contours[cont_idx] for cont_idx in filtered]
+            
+            hole_contours = []
+
+            for hole_ids in all_holes:
+                unfiltered_holes = [contours[idx] for idx in hole_ids ]
+                unfilered_holes = sorted(unfiltered_holes, key=cv2.contourArea, reverse=True)
+                # take max_n_holes largest holes by area
+                unfilered_holes = unfilered_holes[:filter_params['max_n_holes']]
+                filtered_holes = []
+                
+                # filter these holes
+                for hole in unfilered_holes:
+                    if cv2.contourArea(hole) > filter_params['a_h']:
+                        filtered_holes.append(hole)
+
+                hole_contours.append(filtered_holes)
+
+            return foreground_contours, hole_contours
+
         # load binary mask from image file
         img = self.wsi.read_region((0,0), seg_level, self.level_dim[seg_level])
 
@@ -116,9 +165,19 @@ class WholeSlideImage(object):
         mask = cv2.resize(mask, img.size, interpolation=cv2.INTER_NEAREST)
 
         scale = self.level_downsamples[seg_level]
+        scaled_ref_patch_area = int(ref_patch_size**2 / (scale[0] * scale[1]))
+        filter_params = filter_params.copy()
+        filter_params['a_t'] = filter_params['a_t'] * scaled_ref_patch_area
+        filter_params['a_h'] = filter_params['a_h'] * scaled_ref_patch_area
+
+        contours, hierarchy = cv2.findContours(mask.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        hierarchy = np.squeeze(hierarchy, axis=(0,))[:, 2:]
+        if filter_params: 
+            foreground_contours, hole_contours = _filter_contours(contours, hierarchy, filter_params)  # Necessary for filtering out artifacts
+       
         # find contours
-        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-        self.contours_tissue = self.scaleContourDim(contours, scale)
+        self.contours_tissue = self.scaleContourDim(foreground_contours, scale)
+        self.holes_tissue = self.scaleHolesDim(hole_contours, scale)
 
     def saveSegmentation(self, mask_file):
         # save segmentation results using pickle
@@ -344,7 +403,11 @@ class WholeSlideImage(object):
         else:
             sorted_indices = set(np.arange(len(sorted_indices))) - set(exclude_ids)
 
-        bounding_masks = [bounding_masks[i] for i in sorted_indices]
+        if len(bounding_masks) >= len(sorted_indices):
+            bounding_masks = [bounding_masks[i] for i in sorted_indices]
+        else:
+            sorted_indices = sorted_indices[:len(bounding_masks)]
+            bounding_masks = [bounding_masks[i] for i in sorted_indices]
         mask = np.maximum.reduce([full_masks[i] for i in sorted_indices])
 
         if invert:
