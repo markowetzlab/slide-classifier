@@ -21,11 +21,19 @@ def stitching(file_path, wsi_object, downscale = 64):
 def segment(WSI_object, seg_params = None, filter_params = None, mask_file = None):
 	### Start Seg Timer
 	start_time = time.time()
-	# Use segmentation file
+	# Use segmentation file if provided
 	if mask_file is not None:
-		WSI_object.initSegmentation(mask_file)
-	# Segment	
-	else:
+		# Initialize segmentation from a pickle file
+		if mask_file.endswith('.pkl'):
+			WSI_object.initSegmentation(mask_file)
+		# Initialize binary mask from an image file
+		elif mask_file.endswith(('.jpg', '.jpeg', '.png')):
+			WSI_object.initBinaryMask(mask_file, seg_params['seg_level'])
+		else:
+			mask_file = None
+
+	# Perform tissue segmentation if no mask file is provided
+	if mask_file is None:
 		WSI_object.segmentTissue(**seg_params, filter_params=filter_params)
 
 	### Stop Seg Timers
@@ -45,7 +53,7 @@ def patching(WSI_object, **kwargs):
 	return file_path, patch_time_elapsed
 
 
-def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_dir, 
+def seg_and_patch(source, mask_source, save_dir, patch_save_dir, mask_save_dir, stitch_save_dir, 
 				  patch_size = 256, step_size = 256, 
 				  seg_params = {'seg_level': -1, 'sthresh': 8, 'mthresh': 7, 'close': 4, 'use_otsu': False,
 				  'keep_ids': 'none', 'exclude_ids': 'none', 'based_on': 'hed'},
@@ -60,6 +68,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 	
 	slides = sorted(os.listdir(source))
 	slides = [slide for slide in slides if os.path.isfile(os.path.join(source, slide))]
+
 	if process_list is None:
 		df = initialize_df(slides, seg_params, filter_params, vis_params, patch_params)
 	
@@ -90,6 +99,10 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 		df.to_csv(os.path.join(save_dir, f'process_list_{str(date)}.csv'), index=False)
 		idx = process_stack.index[i]
 		slide = process_stack.loc[idx, 'slide_id']
+		mask_file = None
+		if args.base == 'mask':
+			mask_file = process_stack.loc[idx, 'mask_id']
+			mask_file = os.path.join(mask_source, os.path.basename(mask_file)) if mask_source is not None else source 
 		print("\n\nprogress: {:.2f}, {}/{}".format(i/total, i, total))
 		print('processing {}'.format(slide))
 		
@@ -189,7 +202,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 
 		seg_time_elapsed = -1
 		if seg:
-			WSI_object, seg_time_elapsed = segment(WSI_object, current_seg_params, current_filter_params) 
+			WSI_object, seg_time_elapsed = segment(WSI_object, current_seg_params, current_filter_params, mask_file=mask_file)
 
 		if save_mask:
 			mask = WSI_object.visWSI(**current_vis_params)
@@ -239,7 +252,10 @@ parser.add_argument('--patch_size', type = int, default=256,
 					help='patch_size')
 parser.add_argument('--patch', default=False, action='store_true')
 parser.add_argument('--seg', default=False, action='store_true')
-parser.add_argument('--base', default='hed', type=str, help='segmentation based on colour space (hed, gray)}')
+parser.add_argument('--base', default='hed', type=str, help='segmentation based on colour space (hed, gray, mask)}',
+					choices=['hed', 'gray', 'mask'])
+parser.add_argument('--mask_source', type = str, default=None,
+					help='path to folder containing pre-processed mask files if base == "mask"(optional)')
 parser.add_argument('--keep_ids', default='none', type=str, help='ids to keep , e.g. [1, 6, 8]')
 parser.add_argument('--exclude_ids', default='none', type=str, help='ids to exclude e.g. [0, 7, 9]')
 parser.add_argument('--stitch', default=False, action='store_true')
@@ -266,11 +282,13 @@ if __name__ == '__main__':
 		process_list = None
 
 	print('source: ', args.source)
+	print('mask_source: ', args.mask_source)
 	print('patch_save_dir: ', patch_save_dir)
 	print('mask_save_dir: ', mask_save_dir)
 	print('stitch_save_dir: ', stitch_save_dir)
 	
-	directories = {'source': args.source, 
+	directories = {'source': args.source,
+				   'mask_source': args.mask_source,
 				   'save_dir': args.save_dir,
 				   'patch_save_dir': patch_save_dir, 
 				   'mask_save_dir' : mask_save_dir, 

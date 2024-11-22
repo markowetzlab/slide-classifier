@@ -108,6 +108,18 @@ class WholeSlideImage(object):
         # self.holes_tissue = asset_dict['holes']
         self.contours_tissue = asset_dict['tissue']
 
+    def initBinaryMask(self, mask_file, seg_level=0):
+        # load binary mask from image file
+        img = self.wsi.read_region((0,0), seg_level, self.level_dim[seg_level])
+
+        mask = np.array(Image.open(mask_file).convert('L'))
+        mask = cv2.resize(mask, img.size, interpolation=cv2.INTER_NEAREST)
+
+        scale = self.level_downsamples[seg_level]
+        # find contours
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        self.contours_tissue = self.scaleContourDim(contours, scale)
+
     def saveSegmentation(self, mask_file):
         # save segmentation results using pickle
         # asset_dict = {'holes': self.holes_tissue, 'tissue': self.contours_tissue}

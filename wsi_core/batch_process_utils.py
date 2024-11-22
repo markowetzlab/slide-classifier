@@ -24,6 +24,10 @@ def initialize_df(slides, seg_params, filter_params, vis_params, patch_params,
 		slide_ids = slides
 	default_df_dict = {'slide_id': slide_ids, 'process': np.full((total), 1, dtype=np.uint8)}
 
+	# check if binary mask_id is provided 
+	if 'mask_id' in slides.columns:
+		default_df_dict.update({'mask_id': slides['mask_id'].values})
+
 	# initiate empty labels in case not provided
 	if use_heatmap_args:
 		default_df_dict.update({'label': np.full((total), -1)})
@@ -64,7 +68,6 @@ def initialize_df(slides, seg_params, filter_params, vis_params, patch_params,
 			'x2': np.empty((total)).fill(np.NaN), 
 			'y1': np.empty((total)).fill(np.NaN), 
 			'y2': np.empty((total)).fill(np.NaN)})
-
 
 	if isinstance(slides, pd.DataFrame):
 		temp_copy = pd.DataFrame(default_df_dict) # temporary dataframe w/ default params
