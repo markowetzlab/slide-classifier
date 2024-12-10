@@ -291,13 +291,13 @@ if __name__ == '__main__':
 	directories = {'source': args.source,
 				   'mask_source': args.mask_source,
 				   'save_dir': args.save_dir,
-				   'patch_save_dir': patch_save_dir, 
-				   'mask_save_dir' : mask_save_dir, 
+				   'patch_save_dir': patch_save_dir,
+				   'mask_save_dir' : mask_save_dir,
 				   'stitch_save_dir': stitch_save_dir} 
 
 	for key, val in directories.items():
 		print("{} : {}".format(key, val))
-		if key not in ['source']:
+		if key not in ['source', 'mask_source']:
 			os.makedirs(val, exist_ok=True)
 
 	seg_params = {'seg_level': -1, 'based_on': args.base, 'contrast': 1, 'keep_ids': args.keep_ids, 'exclude_ids':args.exclude_ids}
